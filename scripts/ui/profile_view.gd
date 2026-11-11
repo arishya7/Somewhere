@@ -214,10 +214,11 @@ func _build_profile() -> void:
 	match_btn.custom_minimum_size.y = 52
 	match_btn.disabled = following and not matched
 	var mutual := Profile.wants_to_meet_me(person)
-	if not matched and not following and not mutual:
-		match_btn.text = "Not looking to meet you"
-		match_btn.disabled = true
-		match_btn.tooltip_text = "%s is here to meet %s. You can still play together as friends." % [person.name, ", ".join(person.get("show_me", [])).to_lower()]
+	var friends_only := not matched and not following and not mutual
+	if friends_only:
+		# They're here to meet someone else, so it can't be a date, but you can still connect as friends.
+		match_btn.text = "Follow as a friend"
+		match_btn.tooltip_text = "%s is here to meet %s, so this would be a friendship. If you both follow, you can chat, call and do quests together." % [person.name, ", ".join(person.get("show_me", [])).to_lower()]
 	match_btn.pressed.connect(func() -> void:
 		if matched:
 			chat_requested.emit(person.id)
@@ -234,6 +235,8 @@ func _build_profile() -> void:
 			_close()
 			play_requested.emit(who))
 		right.add_child(play)
+	if friends_only:
+		right.add_child(UI.label("%s is looking to meet %s, so you'd connect as friends." % [person.name, ", ".join(person.get("show_me", [])).to_lower()], 12, UI.GOLD))
 	if not matched:
 		right.add_child(UI.label("Following is private. You only match if %s follows your string too." % person.name, 12, UI.FAINT))
 
