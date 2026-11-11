@@ -579,9 +579,18 @@ func _toast(text: String) -> void:
 		app.toast(text)
 
 
+var _retry_in := 3.0
+
+
 func _process(delta: float) -> void:
 	if is_hosting():
 		_serve()
+	# Online server configured: keep trying to (re)connect, e.g. while the free server wakes up.
+	if _client == null and server_url() != "" and not "--relay" in OS.get_cmdline_user_args():
+		_retry_in -= delta
+		if _retry_in <= 0.0:
+			_retry_in = 5.0
+			join(server_url())
 	if _client == null:
 		return
 	_client.poll()
@@ -605,8 +614,8 @@ func _process(delta: float) -> void:
 				_stop_audio()
 				call_with = ""
 				_set_call("idle")
-			if status != "offline":
-				_toast("Disconnected from friends.")
+			if status == "online":
+				_toast("Lost connection. Reconnecting…")
 			_client = null
 			players.clear()
 			_set_status("offline")
