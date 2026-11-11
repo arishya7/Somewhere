@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: somewhere-relay
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
