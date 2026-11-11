@@ -206,9 +206,20 @@ func quest_partner(place: String, _venue_type := "") -> Dictionary:
 	for q in data.get("quests", []):
 		if q.status != "active" or q.place != place or not data.matches.has(q.with):
 			continue
+		# Real people move on their own; only simulated partners walk with you.
+		if str(q.with).begins_with("net:"):
+			continue
 		# They stay with you anywhere on that street, even if you wander into the wrong door.
 		return data.matches[q.with].person
 	return {}
+
+
+## The handle of a real match you have an active quest with (at this place, or anywhere if place is "").
+func real_quest_partner(place := "") -> String:
+	for q in data.get("quests", []):
+		if q.status == "active" and str(q.with).begins_with("net:") and (place == "" or q.place == place):
+			return str(q.with).substr(4)
+	return ""
 
 
 ## The active quest happening on this street, if any.

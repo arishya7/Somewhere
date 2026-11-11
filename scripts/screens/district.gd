@@ -430,8 +430,9 @@ func _draw() -> void:
 			else:
 				_avatar(person.cfg, p, _depth_scale(p.y), _t, {"stride": sin(_t * 9.0) * 0.6})
 			var tag := Vector2(p.x - _cam, p.y - 300.0 * _depth_scale(p.y) - 26.0)
-			var label: String = "@" + h + ("  ·  " + person.pronouns if person.pronouns != "" else "") + ("  ·  resting at the Shore" if resting else "")
-			UI.draw_tag(self, tag + Vector2(0, 8), label, UI.SAGE, UI.INK, person.get("orientation", ""), 18)
+			var quest := h == Profile.real_quest_partner(_place.name)
+			var label: String = ("★  " if quest else "") + "@" + h + ("  ·  " + person.pronouns if person.pronouns != "" else "") + ("  ·  resting at the Shore" if resting else "") + ("  ·  your quest partner" if quest else "")
+			UI.draw_tag(self, tag + Vector2(0, 8), label, UI.GOLD if quest else UI.SAGE, UI.INK, person.get("orientation", ""), 18)
 		else:
 			var w: Dictionary = _walkers[f[1]]
 			if w.x - _cam < -120 or w.x - _cam > s.x + 120:

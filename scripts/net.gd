@@ -313,8 +313,10 @@ func _hello() -> void:
 	_said_hello = true
 
 
-func set_presence(screen: String, place := "", spot := "", pos := Vector2.ZERO) -> void:
+## extra: venue "type", "door", "mall", and "seat" (table seat index, -1 standing) so friends can find you.
+func set_presence(screen: String, place := "", spot := "", pos := Vector2.ZERO, extra := {}) -> void:
 	var p := {"screen": screen, "place": place, "spot": spot, "x": snappedf(pos.x, 1.0), "y": snappedf(pos.y, 1.0)}
+	p.merge(extra)
 	if p != _presence:
 		_presence = p
 		_presence_dirty = true
@@ -504,6 +506,9 @@ func _receive(msg: Dictionary) -> void:
 			play_received.emit(str(msg.get("from", "")), int(msg.get("round", 0)), int(msg.get("choice", 0)))
 		"welcome":
 			_set_status("online")
+			# A fresh connection: tell the server where we are again, or friends see us nowhere.
+			_presence_dirty = true
+			_presence_clock = 0.0
 			for r in msg.get("roster", []):
 				players[r.handle] = {"profile": r.profile, "presence": r.presence, "photos": []}
 			roster_changed.emit()
@@ -580,6 +585,52 @@ func _toast(text: String) -> void:
 
 
 var _retry_in := 3.0
+var _ping_in := 20.0
+
+
+## Where a friend is right now, in words.
+func where_text(handle: String) -> String:
+	var pr: Dictionary = players.get(handle, {}).get("presence", {})
+	var place := str(pr.get("place", ""))
+	var spot := str(pr.get("spot", ""))
+	var at := ""
+	match str(pr.get("screen", "")):
+		"venue": at = "at %s, %s" % [spot, place]
+		"district": at = ("in %s, %s" % [spot, place]) if spot != "" else "walking around %s" % place
+		"map": at = "looking at the map"
+		_: at = "just arrived"
+	if bool(pr.get("resting", false)):
+		at = "resting at the Shore (last seen %s)" % at
+	return at
+
+
+## The screen and params that put you right next to a friend, or [] if there's nowhere to go.
+func go_to(handle: String) -> Array:
+	var pr: Dictionary = players.get(handle, {}).get("presence", {})
+	var place := str(pr.get("place", ""))
+	match str(pr.get("screen", "")):
+		"venue":
+			if place == "" or str(pr.get("type", "")) == "":
+				return []
+			var p := {"place": place, "venue": str(pr.get("spot", "")), "type": str(pr.type), "door": int(pr.get("door", 0))}
+			if str(pr.get("mall", "")) != "":
+				p.mall = str(pr.mall)
+			return ["venue", p]
+		"district":
+			if place == "":
+				return []
+			var d := {"place": place}
+			if str(pr.get("spot", "")) != "":
+				d.mall = str(pr.spot)
+			return ["district", d]
+		"map":
+			return ["map", {}]
+	return []
+
+
+## Seat index a friend is sitting in at this venue (-1 standing).
+func seat_of(handle: String) -> int:
+	return int(players.get(handle, {}).get("presence", {}).get("seat", -1))
 
 
 func _process(delta: float) -> void:
@@ -604,6 +655,11 @@ func _process(delta: float) -> void:
 					_receive(msg)
 			if call_state == "active":
 				_pump_voice()
+			# Keep the connection warm so hosting proxies don't drop quiet players.
+			_ping_in -= delta
+			if _ping_in <= 0.0:
+				_ping_in = 20.0
+				_send({"t": "ping"})
 			_presence_clock -= delta
 			if _presence_dirty and _presence_clock <= 0.0 and status == "online":
 				_send({"t": "presence", "presence": _presence})

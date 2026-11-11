@@ -73,6 +73,18 @@ thrift try-on, record listening via `scripts/synth.gd`, Star Catcher arcade, dan
   `invite` / `invite_reply` / `play` between two people whose presence is the same venue (`_same_room`).
   Trivia uses a shared seed and exchanges real answers per round; it never invents a real person's replies.
 
+## Playing together (real people)
+- `Net.set_presence(..., extra)` carries venue `type`, `door`, `mall` and table `seat`; presence is re-sent after every
+  (re)connect and a `ping` goes out every 20 s. `Net.where_text(h)` / `Net.go_to(h)` power the dock's **Who's on**
+  panel (`scripts/ui/whos_on.gd`): everyone online, where they are, "Go to them".
+- Venues with `TABLES` (café, restaurant, bar, bookstore, records, gallery): tap a table to sit; friends' seats come
+  from presence. Sitting with someone makes them the play target (`_play_target`: tablemate → quest partner here →
+  the only friend here). Invites work in every venue type: bars play live trivia, others play live "moments"
+  (`activities.gd` with a shared seed; `LIVE_MOMENTS` for hands-on venues). Picks are exchanged with `Net.send_play`;
+  a real person's answers are never invented.
+- Quests with a real match: `Profile.quest_partner` skips real people (they move on their own);
+  `Profile.real_quest_partner(place)` drives the gold ★ tags and "Tell @x you're here" (sends a chat message).
+
 ## Data boundaries
 `scripts/validate.gd`: name, handle, per-country phone length, email, real-date birthday 18–99, text limits, photo limits.
 

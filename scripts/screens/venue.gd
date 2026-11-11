@@ -13,6 +13,8 @@ const Dock = preload("res://scripts/ui/dock.gd")
 const Activities = preload("res://scripts/ui/activities.gd")
 
 const SPOTS := [0.38, 0.52, 0.66, 0.8, 0.45, 0.73]
+## Tables you can sit at (x as a fraction of the screen). Two seats each: seat = table * 2 + side.
+const TABLES := {"cafe": [0.54, 0.8], "restaurant": [0.54, 0.8], "bar": [0.54, 0.8], "bookstore": [0.54, 0.8], "records": [0.56], "gallery": [0.62]}
 const Synth = preload("res://scripts/synth.gd")
 
 ## Little things to do in each room: [label, x, y (fractions of the screen), kind, payload]
@@ -56,6 +58,11 @@ var _hover_prop := -1
 var _player: AudioStreamPlayer
 var _popover: Control
 var _partner := {}
+var _seat := -1
+var _join: Button
+var _host_btn: Button
+var _status: Label
+var _hover_table := -1
 
 
 func _ready() -> void:
@@ -113,22 +120,186 @@ func _build_hud() -> void:
 	card.add_child(v)
 	v.add_child(UI.eyebrow("Tonight", UI.GOLD))
 	v.add_child(UI.label(Places.VENUE_MOOD[_type], 18, UI.CREAM, 500))
+	_status = UI.label("", 14, UI.MUTED)
+	v.add_child(_status)
+	_join = UI.button("Join trivia" if _type == "bar" else Activities.ACTIONS.get(_type, "Join in"), "PrimaryButton")
+	_join.custom_minimum_size.y = 48
+	_join.pressed.connect(_on_join)
+	v.add_child(_join)
+	_host_btn = UI.button("", "TextButton")
+	_host_btn.pressed.connect(func() -> void: _start_activity())
+	v.add_child(_host_btn)
+	_stand_btn = UI.button("Stand up from the table", "TextButton")
+	_stand_btn.pressed.connect(func() -> void:
+		_seat = -1
+		_refresh_hud())
+	v.add_child(_stand_btn)
+	_quest_nudge = UI.button("", "TextButton")
+	_quest_nudge.pressed.connect(_nudge_partner)
+	v.add_child(_quest_nudge)
+	_refresh_hud()
+
+
+var _quest_nudge: Button
+var _stand_btn: Button
+var _hud_clock := 0.0
+
+
+## Who you'd play with right now: someone at your table, then your quest partner, then the only friend here.
+func _play_target() -> String:
+	var fr := _friends()
+	var mates := _tablemates()
+	if not mates.is_empty():
+		return mates[0]
+	var qp := Profile.real_quest_partner(_place.get("name", ""))
+	if qp != "" and qp in fr:
+		return qp
+	if fr.size() == 1:
+		return fr[0]
+	return ""
+
+
+func _activity_name() -> String:
+	return "trivia" if _type == "bar" else Activities.ACTIONS.get(_type, "join in").to_lower()
+
+
+func _refresh_hud() -> void:
+	if _join == null:
+		return
+	var fr := _friends()
+	var target := _play_target()
+	var qp := Profile.real_quest_partner(_place.get("name", ""))
 	var q := Profile.quest_here(_place.get("name", ""))
 	var qv: String = Quests.venue_of(q)[0] if not q.is_empty() else ""
+	_quest_nudge.visible = false
 	if not q.is_empty() and qv != "" and qv != _name and not params.has("mall"):
-		v.add_child(UI.label("Your quest with %s is at %s, a few doors down. Head back outside and look for the gold star." % [_partner.get("name", "your match"), qv], 14, UI.GOLD))
+		_status.text = "Your quest is at %s, a few doors down. Head back outside and look for the gold star." % qv
+		_status.add_theme_color_override("font_color", UI.GOLD)
+	elif qp != "" and qp in fr:
+		_status.text = "@%s is here for your quest. Sit at a table together, or just tap Play." % qp
+		_status.add_theme_color_override("font_color", UI.GOLD)
+	elif qp != "":
+		var online := Net.players.has(qp)
+		_status.text = ("Your quest partner @%s is %s." % [qp, Net.where_text(qp)]) if online else "Your quest partner @%s isn't online right now." % qp
+		_status.add_theme_color_override("font_color", UI.GOLD)
+		_quest_nudge.text = "Tell @%s you're here  ›" % qp
+		_quest_nudge.visible = true
 	elif not _partner.is_empty():
-		v.add_child(UI.label("%s is here for your quest. Do it together." % _partner.name, 14, UI.GOLD))
+		_status.text = "%s is here for your quest. Do it together." % _partner.name
+		_status.add_theme_color_override("font_color", UI.GOLD)
 	else:
-		var here := _people.size() + _friends().size()
-		if here == 0:
-			v.add_child(UI.label("Nobody else is here yet. Do it with %s, the host, or bring friends in from Play with friends." % _staff_name(), 14, UI.MUTED))
-		else:
-			v.add_child(UI.label("%d people here. Tap someone to see who they are." % here, 14, UI.MUTED))
-	var join := UI.button("Join trivia" if _type == "bar" else Activities.ACTIONS.get(_type, "Join in"), "PrimaryButton")
-	join.custom_minimum_size.y = 48
-	join.pressed.connect(func() -> void: _start_activity())
-	v.add_child(join)
+		var here := _people.size() + fr.size()
+		_status.text = "Nobody else is here yet. Your friends can find you from Who's on." if here == 0 \
+			else "%d %s here. Tap a table to sit, or tap someone to see who they are." % [here, "person" if here == 1 else "people"]
+		_status.add_theme_color_override("font_color", UI.MUTED)
+	if target != "":
+		_join.text = "Play %s with @%s" % ["trivia" if _type == "bar" else "together", target]
+		_host_btn.text = "or play with %s, the host" % _staff_name()
+		_host_btn.visible = true
+	else:
+		_join.text = "Join trivia" if _type == "bar" else Activities.ACTIONS.get(_type, "Join in")
+		_host_btn.visible = false
+	_refresh_table_card()
+
+
+func _on_join() -> void:
+	var target := _play_target()
+	if target == "":
+		_start_activity()
+		return
+	_invite(target)
+
+
+func _invite(handle: String) -> void:
+	_invite_seed = randi() % 1000000 + 1
+	Net.send_invite(handle, _name, _invite_seed)
+	get_parent().toast("Asked @%s to play. Waiting for them to say yes…" % handle)
+
+
+func _nudge_partner() -> void:
+	var qp := Profile.real_quest_partner(_place.get("name", ""))
+	if qp == "":
+		return
+	var id := Net.person_id(qp)
+	var text := "I'm at %s in %s for our quest. Come find me! (Who's on → Go to them)" % [_name, _place.get("name", "")]
+	Net.send_chat(qp, text)
+	if Profile.data.matches.has(id):
+		Profile.add_message(id, true, text)
+	get_parent().toast("Sent @%s a message saying where you are." % qp)
+	_quest_nudge.visible = false
+
+
+# --- Tables --------------------------------------------------------------------------
+
+func _tables() -> Array:
+	return TABLES.get(_type, [])
+
+
+func _table_center(t: int) -> Vector2:
+	return Vector2(size.x * float(_tables()[t]), size.y * 0.84)
+
+
+func _seat_pos(seat: int) -> Vector2:
+	var c := _table_center(seat / 2)
+	return Vector2(c.x + (-1.0 if seat % 2 == 0 else 1.0) * size.x * 0.055, size.y * 0.97)
+
+
+func _table_rect(t: int) -> Rect2:
+	var c := _table_center(t)
+	var w := size.x * 0.2
+	return Rect2(c.x - w / 2.0, c.y - size.y * 0.3, w, size.y * 0.46)
+
+
+func _table_at(pos: Vector2) -> int:
+	for t in _tables().size():
+		if _table_rect(t).has_point(pos):
+			return t
+	return -1
+
+
+## Who's sitting in a seat here (a friend's handle, "me", or "").
+func _seated(seat: int) -> String:
+	if seat == _seat:
+		return "me"
+	for h in _friends():
+		if Net.seat_of(h) == seat:
+			return h
+	return ""
+
+
+func _tablemates() -> Array:
+	if _seat < 0:
+		return []
+	var other := _seat + (1 if _seat % 2 == 0 else -1)
+	var h := _seated(other)
+	return [h] if h != "" and h != "me" else []
+
+
+func _click_table(t: int) -> void:
+	if _seat >= 0 and _seat / 2 == t:
+		_seat = -1
+		_refresh_hud()
+		return
+	for side in 2:
+		if _seated(t * 2 + side) == "":
+			_seat = t * 2 + side
+			var mates := _tablemates()
+			get_parent().toast(("You sat down with @%s." % mates[0]) if not mates.is_empty() else "You took a seat. Friends can sit with you.")
+			_refresh_hud()
+			return
+	get_parent().toast("That table's full. Try another one.")
+
+
+func _refresh_table_card() -> void:
+	_stand_btn.visible = _seat >= 0
+	if _seat < 0:
+		return
+	var mates := _tablemates()
+	if mates.is_empty():
+		_status.text = "You're sitting at a table. When a friend sits with you, you can play together."
+	else:
+		_status.text = "You're at a table with @%s." % mates[0]
+	_status.add_theme_color_override("font_color", UI.SAGE)
 
 
 func _leave() -> void:
@@ -171,16 +342,21 @@ func _open_profile(p: Dictionary, invite := false) -> void:
 	var play := ""
 	if invite and p.get("real", false):
 		# Real people: trivia is played live together. Other activities aren't shared yet.
-		play = "Invite to play trivia" if _type == "bar" else ""
+		play = "Invite to play trivia" if _type == "bar" else "Invite to: " + _activity_name()
 	elif invite:
 		play = "Invite to play trivia" if _type == "bar" else "Invite to: " + Activities.ACTIONS.get(_type, "join in").to_lower()
 	_overlay = ProfileView.open(self, p, _name, play)
+	if p.get("real", false) and invite:
+		var seat := Net.seat_of(p.handle)
+		if seat >= 0 and _seated(seat + (1 if seat % 2 == 0 else -1)) == "":
+			_overlay.add_action("Sit with @%s" % p.handle, func() -> void:
+				_seat = seat + (1 if seat % 2 == 0 else -1)
+				get_parent().toast("You sat down with @%s." % p.handle)
+				_refresh_hud())
 	_overlay.chat_requested.connect(func(id: String) -> void: get_parent().go("chat", {"id": id, "back": _back_params()}))
 	_overlay.play_requested.connect(func(who: Dictionary) -> void:
 		if who.get("real", false):
-			_invite_seed = randi() % 1000000 + 1
-			Net.send_invite(who.handle, _name, _invite_seed)
-			get_parent().toast("Asked @%s to play trivia. Waiting for them to say yes…" % who.handle)
+			_invite(who.handle)
 			return
 		get_parent().toast("%s said yes. Let's go!" % who.name)
 		_start_activity(who))
@@ -204,8 +380,8 @@ func _listen_for_invites() -> void:
 		if not yes:
 			get_parent().toast("@%s can't play right now. Maybe later!" % handle)
 			return
-		get_parent().toast("@%s said yes! Trivia is starting." % handle)
-		_start_live_trivia(Net.person_for(handle), seed)
+		get_parent().toast("@%s said yes! Starting now." % handle)
+		_start_live(Net.person_for(handle), seed)
 	Net.invited.connect(on_invite)
 	Net.invite_answered.connect(on_answer)
 	tree_exiting.connect(func() -> void:
@@ -233,9 +409,9 @@ func _invite_card(handle: String, seed: int) -> void:
 	var v := VBoxContainer.new()
 	v.add_theme_constant_override("separation", 12)
 	card.add_child(v)
-	v.add_child(UI.eyebrow("Trivia night  ·  " + _name, UI.GOLD))
-	v.add_child(UI.title("@%s wants to team up" % handle, 30))
-	v.add_child(UI.label("%s%s is here in %s and asked you to play trivia together." % [person.name, (" (" + person.pronouns + ")") if person.pronouns != "" else "", _name], 15, UI.MUTED))
+	v.add_child(UI.eyebrow(("Trivia night" if _type == "bar" else Activities.ACTIONS.get(_type, "Play")) + "  ·  " + _name, UI.GOLD))
+	v.add_child(UI.title("@%s wants to play with you" % handle, 30))
+	v.add_child(UI.label("%s%s is here in %s and asked you to %s together." % [person.name, (" (" + person.pronouns + ")") if person.pronouns != "" else "", _name, "play trivia" if _type == "bar" else _activity_name()], 15, UI.MUTED))
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
 	v.add_child(row)
@@ -243,7 +419,7 @@ func _invite_card(handle: String, seed: int) -> void:
 	yes.pressed.connect(func() -> void:
 		overlay.queue_free()
 		Net.reply_invite(handle, true, seed)
-		_start_live_trivia(person, seed))
+		_start_live(person, seed))
 	row.add_child(yes)
 	var no := UI.button("Not now")
 	no.pressed.connect(func() -> void:
@@ -255,10 +431,13 @@ func _invite_card(handle: String, seed: int) -> void:
 	row.add_child(view)
 
 
-func _start_live_trivia(person: Dictionary, seed: int) -> void:
+func _start_live(person: Dictionary, seed: int) -> void:
 	if _overlay and is_instance_valid(_overlay):
 		_overlay.queue_free()
-	_overlay = Trivia.open(self, person, _name, seed)
+	if _type == "bar":
+		_overlay = Trivia.open(self, person, _name, seed)
+	else:
+		_overlay = Activities.open(self, _type, person, _name, seed)
 	_overlay.profile_requested.connect(_open_profile)
 	_overlay.completed.connect(func() -> void: Profile.quest_event("activity", _place.get("name", ""), _type))
 
@@ -286,7 +465,8 @@ func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		_hover_prop = _prop_at(event.position)
 		_hover = _person_at(event.position) if _hover_prop < 0 else -1
-		if _hover_prop >= 0:
+		_hover_table = _table_at(event.position) if _hover_prop < 0 and _hover < 0 and _friend_at(event.position) == "" else -1
+		if _hover_prop >= 0 or _hover_table >= 0:
 			mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 			return
 		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if _hover >= 0 else Control.CURSOR_ARROW
@@ -302,6 +482,10 @@ func _gui_input(event: InputEvent) -> void:
 		var i := _person_at(event.position)
 		if i >= 0:
 			_open_profile(_people[i], true)
+			return
+		var t := _table_at(event.position)
+		if t >= 0:
+			_click_table(t)
 
 
 func _process(delta: float) -> void:
@@ -312,7 +496,19 @@ func _process(delta: float) -> void:
 		if not lines.is_empty() and not _people.is_empty():
 			_bubble = {"who": randi() % _people.size(), "text": lines[randi() % lines.size()], "until": _t + 3.5}
 		_bubble_in = randf_range(4.0, 8.0)
-	Net.set_presence("venue", _place.get("name", ""), _name)
+	var extra := {"type": _type, "door": int(params.get("door", 0)), "seat": _seat}
+	if params.has("mall"):
+		extra.mall = str(params.mall)
+	Net.set_presence("venue", _place.get("name", ""), _name, Vector2.ZERO, extra)
+	_hud_clock -= delta
+	if _hud_clock <= 0.0:
+		_hud_clock = 0.5
+		# A friend took my seat while I sat down at the same moment: stand up.
+		if _seat >= 0:
+			for h in _friends():
+				if Net.seat_of(h) == _seat and h < str(Profile.data.get("handle", "")):
+					_seat = -1
+		_refresh_hud()
 	queue_redraw()
 
 
@@ -322,7 +518,11 @@ func _friends() -> Array:
 
 
 func _friend_feet(i: int) -> Vector2:
-	return Vector2(size.x * (0.29 + i * 0.07), size.y * 0.8)
+	var h: String = _friends()[i] if i < _friends().size() else ""
+	var seat := Net.seat_of(h) if h != "" else -1
+	if seat >= 0 and seat / 2 < _tables().size():
+		return _seat_pos(seat)
+	return Vector2(size.x * (0.25 + i * 0.065), size.y * 0.8)
 
 
 func _friend_at(pos: Vector2) -> String:
@@ -533,19 +733,22 @@ func _draw() -> void:
 	_draw_staff(s, floor_y)
 	_draw_props(s)
 
-	# Friends who are here too, a little further back.
+	# Friends who are here too, standing a little further back (seated ones are drawn at their table).
 	var fr := _friends()
+	var qp := Profile.real_quest_partner(_place.get("name", ""))
 	for i in fr.size():
+		if _is_seated(fr[i]):
+			continue
 		var f := _friend_feet(i)
 		var resting := Net.is_resting(fr[i])
 		Avatar.draw(self, Net.person_for(fr[i]).cfg, f, _scale() * 0.9, _t + i, {"mono": Color(0.62, 0.6, 0.66, 0.55)} if resting else {})
-		var fp := Net.person_for(fr[i])
-		var label: String = "@" + fr[i] + ("  ·  " + fp.pronouns if fp.pronouns != "" else "") + ("  ·  resting" if resting else "")
-		UI.draw_tag(self, f + Vector2(0, -s.y * 0.36 - 14), label, UI.SAGE, UI.INK, fp.get("orientation", ""), 14)
+		_friend_tag(fr[i], f + Vector2(0, -s.y * 0.36 - 14), fr[i] == qp)
 
-	# You, just inside the door.
+	# You, just inside the door (unless you've sat down).
 	var sc := _scale()
-	Avatar.draw(self, Profile.data.avatar, Vector2(s.x * 0.2, s.y * 0.88), sc, _t)
+	if _seat < 0:
+		Avatar.draw(self, Profile.data.avatar, Vector2(s.x * 0.13, s.y * 0.88), sc, _t)
+		UI.draw_tag(self, Vector2(s.x * 0.13, s.y * 0.88 - s.y * 0.4 - 14), "You", UI.CREAM, UI.INK, Profile.data.get("orientation", "") if Profile.data.get("show_flag", false) else "", 14)
 	var order := [4, 5, 0, 1, 2, 3].filter(func(i) -> bool: return i < _people.size())
 	for i in order:
 		var p: Dictionary = _people[i]
@@ -571,6 +774,72 @@ func _draw() -> void:
 			draw_string(UI.font(600), Vector2(f.x - 80, label_y), "♥  " + p.name, HORIZONTAL_ALIGNMENT_CENTER, 160, 14, UI.ROSE)
 		elif a > 0.0:
 			UI.draw_tag(self, Vector2(f.x, label_y + 8), People.tag(p), UI.CREAM, UI.INK, p.get("orientation", ""), 15)
+
+	_draw_tables(s)
+
+
+func _is_seated(h: String) -> bool:
+	var seat := Net.seat_of(h)
+	return seat >= 0 and seat / 2 < _tables().size()
+
+
+func _friend_tag(h: String, at: Vector2, quest: bool) -> void:
+	var fp := Net.person_for(h)
+	var resting := Net.is_resting(h)
+	var label: String = ("★  " if quest else "") + "@" + h + ("  ·  " + fp.pronouns if fp.pronouns != "" else "") + ("  ·  resting" if resting else "")
+	UI.draw_tag(self, at, label, UI.GOLD if quest else UI.SAGE, UI.INK, fp.get("orientation", ""), 14)
+
+
+## Tables with whoever's sitting at them. Bodies go behind the tabletop so they read as seated.
+func _draw_tables(s: Vector2) -> void:
+	var sc := _scale()
+	var qp := Profile.real_quest_partner(_place.get("name", ""))
+	var wood := Color("#6B4A33") if _type in ["bar", "records", "bookstore"] else Color("#F2EBDD")
+	for t in _tables().size():
+		var c := _table_center(t)
+		var w := s.x * 0.2
+		var top_y := s.y * 0.8
+		# Chairs.
+		for side in 2:
+			var sp := _seat_pos(t * 2 + side)
+			var chair := Rect2(sp.x - s.x * 0.035, top_y - s.y * 0.17, s.x * 0.07, s.y * 0.2)
+			draw_style_box(UI.box(Color("#3A2A22"), 10), chair)
+			draw_style_box(UI.box(Color("#5A4030"), 8), chair.grow(-6))
+		# People sitting.
+		for side in 2:
+			var seat := t * 2 + side
+			var who := _seated(seat)
+			if who == "":
+				continue
+			var cfg: Dictionary = Profile.data.avatar if who == "me" else Net.person_for(who).cfg
+			Avatar.draw(self, cfg, _seat_pos(seat), sc, _t + seat)
+		# The table itself, in front.
+		if t == _hover_table:
+			_glow(Vector2(c.x, top_y), w * 0.7, Color(UI.GOLD, 0.25), 6)
+		draw_set_transform(Vector2(c.x, top_y), 0.0, Vector2(1.0, 0.22))
+		draw_circle(Vector2.ZERO, w / 2.0 + 4.0, wood.darkened(0.35))
+		draw_circle(Vector2.ZERO, w / 2.0, wood)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		draw_colored_polygon(PackedVector2Array([Vector2(c.x - w / 2.0, top_y), Vector2(c.x + w / 2.0, top_y),
+			Vector2(c.x + w / 2.0 + 10, s.y), Vector2(c.x - w / 2.0 - 10, s.y)]), wood.darkened(0.12))
+		draw_line(Vector2(c.x - w / 2.0, top_y + 2), Vector2(c.x + w / 2.0, top_y + 2), wood.darkened(0.4), 2.0)
+		# Two cups.
+		for side in [-1.0, 1.0]:
+			var cup := Vector2(c.x + side * w * 0.2, top_y - 4)
+			draw_rect(Rect2(cup.x - 9, cup.y - 16, 18, 16), Color("#FFFFFF") if _type != "bar" else Color("#E6B55C", 0.9))
+			draw_arc(cup + Vector2(side * 11, -9), 5.0, 0, TAU, 12, Color(1, 1, 1, 0.9), 2.0)
+		# Name tags over whoever is sitting.
+		for side in 2:
+			var seat := t * 2 + side
+			var who := _seated(seat)
+			var head := _seat_pos(seat) + Vector2(0, -s.y * 0.34 - 8)
+			if who == "me":
+				UI.draw_tag(self, head, "You", UI.CREAM, UI.INK, Profile.data.get("orientation", "") if Profile.data.get("show_flag", false) else "", 14)
+			elif who != "":
+				_friend_tag(who, head, who == qp)
+		if t == _hover_table:
+			var hint := "Stand up" if _seat >= 0 and _seat / 2 == t else ("Sit here" if _seated(t * 2) == "" or _seated(t * 2 + 1) == "" else "Table full")
+			UI.draw_tag(self, Vector2(c.x, top_y - s.y * 0.06), hint, UI.GOLD, UI.INK, "", 14)
 
 
 # --- Life in the room: staff, things to touch ------------------------------------

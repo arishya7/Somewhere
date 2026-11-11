@@ -22,6 +22,19 @@ var _dots: HBoxContainer
 var _index := 0
 var _card: PanelContainer
 var _real: TextureRect
+var _right: VBoxContainer
+
+
+## An extra action under the profile (e.g. "Sit with @x"). Closes the profile, then runs cb.
+func add_action(text: String, cb: Callable) -> void:
+	if _right == null:
+		return
+	var b := UI.button(text, "PrimaryButton")
+	b.custom_minimum_size.y = 48
+	b.pressed.connect(func() -> void:
+		_close()
+		cb.call())
+	_right.add_child(b)
 
 
 ## Your own profile, exactly as other people see it.
@@ -225,6 +238,7 @@ func _build_profile() -> void:
 		else:
 			_follow())
 	actions.add_child(match_btn)
+	_right = right
 	if play_text != "":
 		# Getting to know someone by doing something together, no match needed.
 		var play := UI.button(play_text)

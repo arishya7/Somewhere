@@ -4,7 +4,7 @@ extends PanelContainer
 const UI = preload("res://scripts/ui.gd")
 const BreezeGuide = preload("res://scripts/ui/breeze_guide.gd")
 
-const ITEMS := [["map", "Map"], ["shore", "Shore"], ["breeze", "Breeze"], ["messages", "Messages"], ["me", "Me"]]
+const ITEMS := [["map", "Map"], ["people", "Who's on"], ["shore", "Shore"], ["breeze", "Breeze"], ["messages", "Messages"], ["me", "Me"]]
 
 var active := ""
 var back := {}
@@ -49,6 +49,13 @@ func _ready() -> void:
 		b.mouse_entered.connect(b.queue_redraw)
 		b.mouse_exited.connect(b.queue_redraw)
 		b.pressed.connect(_pressed.bind(key))
+		if key == "people":
+			var redraw := func(_x = null) -> void: b.queue_redraw()
+			Net.roster_changed.connect(redraw)
+			Net.status_changed.connect(redraw)
+			tree_exiting.connect(func() -> void:
+				Net.roster_changed.disconnect(redraw)
+				Net.status_changed.disconnect(redraw))
 		row.add_child(b)
 
 
@@ -62,6 +69,8 @@ func _pressed(key: String) -> void:
 			app.go("arrival")
 		"breeze":
 			BreezeGuide.open(_host)
+		"people":
+			load("res://scripts/ui/whos_on.gd").open(_host)
 		"messages":
 			app.go("chat", {"back": back})
 		"me":
@@ -96,6 +105,15 @@ func _draw_item(b: Button, key: String, text: String, on: bool) -> void:
 					swirl.append(c + Vector2(-13 + u * 22.0, -7 + k * 7 + sin(u * PI * 1.6 + k) * 3.0))
 				b.draw_polyline(swirl, col, 1.6, true)
 			b.draw_circle(c + Vector2(11, -9), 2.2, UI.GOLD)
+		"people":
+			b.draw_circle(c + Vector2(-5, -5), 5.0, col)
+			b.draw_arc(c + Vector2(-5, 11), 9.0, PI, TAU, 16, col, 2.0, true)
+			b.draw_circle(c + Vector2(8, -3), 4.0, col)
+			b.draw_arc(c + Vector2(8, 11), 7.0, PI * 1.1, TAU, 12, col, 2.0, true)
+			var n := Net.players.size()
+			var dot := UI.SAGE if Net.is_online() else UI.FAINT
+			b.draw_circle(c + Vector2(15, -12), 8.0, dot)
+			b.draw_string(UI.font(800), c + Vector2(7, -8), str(n) if Net.is_online() else "·", HORIZONTAL_ALIGNMENT_CENTER, 16, 11, UI.INK)
 		"messages":
 			b.draw_style_box(UI.box(Color(0, 0, 0, 0), 8, col, 2), Rect2(c + Vector2(-12, -10), Vector2(24, 17)))
 			b.draw_colored_polygon(PackedVector2Array([c + Vector2(-6, 6), c + Vector2(-1, 6), c + Vector2(-7, 12)]), col)

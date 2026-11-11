@@ -49,6 +49,30 @@ const MOMENTS := {
 	]},
 }
 
+## Played live with a real person in venues whose usual activity is hands-on (not synced yet).
+const LIVE_MOMENTS := {
+	"thrift": {"open": "", "steps": [
+		["Pick a piece for the other person to try on.", ["The loud printed shirt", "A leather jacket", "Something sequinned", "A very serious blazer"], "Picked %s for you", ""],
+		["Budget: twenty dollars. Spend it on…", ["One great thing", "As many weird things as possible", "Something for someone else", "Nothing, just browsing"], "With twenty dollars: %s", ""],
+		["Your thrift rule?", ["Always check the pockets", "If it fits, it's fate", "Never buy shoes", "Sniff test, every time"], "Thrift rule: %s", ""],
+	]},
+	"records": {"open": "", "steps": [
+		["Pick a crate to dig through together.", ["Late-night jazz", "Lo-fi beats", "Synth pop", "Soul & funk"], "Went for the %s crate", ""],
+		["A song you'd play on a long drive?", ["Something to sing along to", "Something slow and sad", "Old classics", "Whatever the radio says"], "On a long drive: %s", ""],
+		["Vinyl, streaming or live?", ["Vinyl, obviously", "Streaming, sorry", "Live, every time", "Whatever's playing"], "Prefers %s", ""],
+	]},
+	"arcade": {"open": "", "steps": [
+		["Pick a game to play first.", ["Air hockey", "The claw machine", "Dance machine", "Racing"], "Wanted to start with %s", ""],
+		["Are you competitive?", ["Extremely", "Only when losing", "Not at all", "I let people win"], "On being competitive: %s", ""],
+		["Prize-counter splurge?", ["A giant plushie", "Sweets", "A tiny rubber duck", "Save tickets forever"], "At the prize counter: %s", ""],
+	]},
+	"club": {"open": "", "steps": [
+		["Request a song for the DJ.", ["A 2000s throwback", "Something brand new", "A K-pop banger", "Anything you can't sit still to"], "Requested %s", ""],
+		["Dance floor or the edge of it?", ["Middle of the floor", "Near the speakers", "Edge, watching", "Wherever my friends are"], "Dances %s", ""],
+		["Last train or stay till close?", ["Last train, always", "Till close", "Leave when it's best", "Depends who's there"], "On going home: %s", ""],
+	]},
+}
+
 ## [name, slot, style index, colour index, price]
 const THRIFT_ITEMS := [
 	["Vintage denim jacket", "top", 4, 2, 18], ["Cream knit sweater", "top", 6, 12, 14], ["Rust silk shirt", "top", 2, 10, 22],
@@ -77,10 +101,19 @@ var _canvas: Control
 var _game := {}
 var _player: AudioStreamPlayer
 var _preview := {}
+## Live game with a real person: shared seed, their actual picks by step.
+var seed := 0
+var _theirs_by_step := {}
+var _waiting := {}
 
 
-static func open(host: Control, activity: String, person: Dictionary, venue_name: String) -> Control:
+func _real() -> bool:
+	return companion.get("real", false)
+
+
+static func open(host: Control, activity: String, person: Dictionary, venue_name: String, shared_seed := 0) -> Control:
 	var a = load("res://scripts/ui/activities.gd").new()
+	a.seed = shared_seed
 	a.kind = activity
 	a.companion = person
 	a.venue = venue_name
@@ -91,7 +124,17 @@ static func open(host: Control, activity: String, person: Dictionary, venue_name
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	UI.scrim(self)
-	_rng.seed = hash(companion.id + str(Time.get_ticks_msec()))
+	_rng.seed = seed if seed != 0 else hash(companion.id + str(Time.get_ticks_msec()))
+	if _real():
+		var on_play := func(h: String, r: int, choice: int) -> void:
+			if h == companion.get("handle", ""):
+				_theirs_by_step[r] = choice
+				if not _waiting.is_empty() and int(_waiting.step) == r:
+					var cb: Callable = _waiting.cb
+					_waiting = {}
+					cb.call()
+		Net.play_received.connect(on_play)
+		tree_exiting.connect(func() -> void: Net.play_received.disconnect(on_play))
 	_player = AudioStreamPlayer.new()
 	add_child(_player)
 	_card = PanelContainer.new()
@@ -108,6 +151,9 @@ func _ready() -> void:
 	_body = VBoxContainer.new()
 	_body.add_theme_constant_override("separation", 14)
 	_card.add_child(_body)
+	if _real():
+		_moment()
+		return
 	match kind:
 		"thrift": _thrift()
 		"records": _records()
@@ -187,14 +233,24 @@ func _finish(headline: String) -> void:
 	_clear()
 	_header(headline)
 	var facts := _learned.duplicate()
-	if not companion.get("host", false):
+	if _real():
+		Profile.learn(companion.id, facts)
+		_body.add_child(UI.eyebrow("What you found out about @%s" % companion.handle, UI.GOLD))
+		for f in facts.slice(0, 5):
+			_body.add_child(UI.label("·  " + f, 15, UI.CREAM))
+	elif not companion.get("host", false):
 		for f in companion.facts.slice(0, 1):
 			facts.append(f.left(1).to_upper() + f.substr(1))
 		Profile.learn(companion.id, facts)
 		_body.add_child(UI.eyebrow("What you noticed about %s" % companion.name, UI.GOLD))
 		for f in facts.slice(0, 5):
 			_body.add_child(UI.label("·  " + f, 15, UI.CREAM))
-	_companion("This was nice. " + People.TRAITS[companion.traits[1]].voice)
+	if _real():
+		_companion("You and @%s finished this together. Say hi in chat, or play again." % companion.handle)
+	elif companion.get("traits", []).size() > 1:
+		_companion("This was nice. " + People.TRAITS[companion.traits[1]].voice)
+	else:
+		_companion("This was nice. Come back any time.")
 	_spacer()
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 10)
@@ -203,7 +259,7 @@ func _finish(headline: String) -> void:
 	back.custom_minimum_size.y = 52
 	back.pressed.connect(_close)
 	row.add_child(back)
-	if companion.get("host", false):
+	if companion.get("host", false) or _real():
 		return
 	var view := UI.button("See %s's profile" % companion.name, "PrimaryButton")
 	view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -233,7 +289,7 @@ func _process(delta: float) -> void:
 # --- Moments: choice-based conversations -------------------------------------------
 
 func _moment() -> void:
-	var data: Dictionary = MOMENTS.get(kind, MOMENTS.cafe)
+	var data: Dictionary = MOMENTS.get(kind, LIVE_MOMENTS.get(kind, MOMENTS.cafe))
 	_clear()
 	if _step >= data.steps.size():
 		_finish("That was lovely.")
@@ -247,9 +303,13 @@ func _moment() -> void:
 	elif visual == "breath":
 		_breath()
 		return
-	_companion(data.open if _step == 0 else "Your turn first.")
+	if _real():
+		_companion("You're doing this live with @%s. You both pick, then you see each other's answer." % companion.handle)
+	else:
+		_companion(data.open if _step == 0 else "Your turn first.")
 	var options: Array = step[1]
 	var theirs: String = options[_rng.randi() % options.size()]
+	var my_step := _step
 	var grid := GridContainer.new()
 	grid.columns = 2
 	grid.add_theme_constant_override("h_separation", 10)
@@ -271,6 +331,24 @@ func _moment() -> void:
 		b.pressed.connect(func() -> void:
 			for x in buttons:
 				x.disabled = true
+			if _real():
+				Net.send_play(companion.handle, my_step, options.find(b.text))
+				var reveal := func() -> void:
+					if _step != my_step or not is_instance_valid(b):
+						return
+					var t: String = options[clampi(int(_theirs_by_step.get(my_step, 0)), 0, options.size() - 1)]
+					_mark(buttons, b.text, t)
+					_bubble.text = ("@%s picked the same: %s." if t == b.text else "@%s picked: %s.") % [companion.handle, t]
+					_fact(step[2] % (t.left(1).to_lower() + t.substr(1)) if step[2] != "" else "")
+					next.visible = true
+				if _theirs_by_step.has(my_step):
+					reveal.call()
+				else:
+					_bubble.text = "Waiting for @%s to pick…" % companion.handle
+					_waiting = {"step": my_step, "cb": reveal}
+					_wait_escape(next)
+				return
+			for x in buttons:
 				if x.text == b.text:
 					x.add_theme_stylebox_override("disabled", UI.box(UI.CREAM, 12, Color(0, 0, 0, 0), 0, 16, 9))
 					x.add_theme_color_override("font_disabled_color", UI.INK)
@@ -283,6 +361,27 @@ func _moment() -> void:
 				_bubble.text = "Ooh. I'd have said '%s'. Tell me why yours?" % theirs
 			_fact(step[2] % (theirs.left(1).to_lower() + theirs.substr(1)) if step[2] != "" else "")
 			next.visible = true)
+
+
+## Colour your pick and theirs.
+func _mark(buttons: Array, mine: String, theirs: String) -> void:
+	for x in buttons:
+		if x.text == mine:
+			x.add_theme_stylebox_override("disabled", UI.box(UI.CREAM, 12, Color(0, 0, 0, 0), 0, 16, 9))
+			x.add_theme_color_override("font_disabled_color", UI.INK)
+		elif x.text == theirs:
+			x.add_theme_stylebox_override("disabled", UI.box(Color(UI.GOLD, 0.2), 12, UI.GOLD, 1, 16, 9))
+			x.add_theme_color_override("font_disabled_color", UI.CREAM)
+
+
+## If the other person wanders off, don't leave you stuck waiting.
+func _wait_escape(next: Button) -> void:
+	await get_tree().create_timer(20.0).timeout
+	if not is_instance_valid(next) or _waiting.is_empty():
+		return
+	_bubble.text = "@%s is taking a while. They may have stepped away." % companion.handle
+	next.text = "Carry on without them"
+	next.visible = true
 
 
 func _draw_art(seed_n: int) -> void:
@@ -304,7 +403,7 @@ func _draw_art(seed_n: int) -> void:
 
 
 func _breath() -> void:
-	_companion("In for three, out for three. I'll count.")
+	_companion(("Breathing with @%s. In for three, out for three." % companion.handle) if _real() else "In for three, out for three. I'll count.")
 	_game = {"start": -1.0}
 	_canvas_area(280, func() -> void:
 		var s := _canvas.size
@@ -332,7 +431,7 @@ func _breath() -> void:
 			await get_tree().create_timer(12.0).timeout
 			if not is_instance_valid(b):
 				return
-			_bubble.text = "Okay. That actually helped."
+			_bubble.text = "Done. Breathing together, even miles apart." if _real() else "Okay. That actually helped."
 			b.disabled = false
 			b.text = "Next"
 		else:
