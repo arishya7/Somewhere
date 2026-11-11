@@ -35,6 +35,7 @@ var _error: Label
 var _continue: Button
 var _progress: ProgressBar
 var _file_dialog: FileDialog
+var _page_scroll: ScrollContainer
 var _photo_grid: GridContainer
 
 
@@ -69,9 +70,16 @@ func _ready() -> void:
 	brand.add_theme_font_override("font", UI.serif(400, true))
 	top.add_child(brand)
 
+	# The page scrolls when it's taller than the window (small laptops, the browser);
+	# Continue stays pinned at the bottom so it's always reachable.
+	_page_scroll = ScrollContainer.new()
+	_page_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_page_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	outer.add_child(_page_scroll)
 	var center := CenterContainer.new()
+	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	center.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	outer.add_child(center)
+	_page_scroll.add_child(center)
 	_column = VBoxContainer.new()
 	_column.custom_minimum_size.x = 580
 	_column.add_theme_constant_override("separation", 12)
@@ -89,9 +97,12 @@ func _ready() -> void:
 	_error = UI.label("", 15, UI.ROSE.lightened(0.2))
 	_column.add_child(_error)
 	_continue = UI.button("Continue", "PrimaryButton")
-	_continue.custom_minimum_size.y = 58
+	_continue.custom_minimum_size = Vector2(580, 58)
 	_continue.pressed.connect(_next)
-	_column.add_child(_continue)
+	var bottom := CenterContainer.new()
+	bottom.custom_minimum_size.y = 72
+	outer.add_child(bottom)
+	bottom.add_child(_continue)
 
 	_file_dialog = FileDialog.new()
 	_file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILES
@@ -119,6 +130,7 @@ func _process(_delta: float) -> void:
 func _show_step() -> void:
 	for c in _content.get_children():
 		c.queue_free()
+	_page_scroll.scroll_vertical = 0
 	_error.text = ""
 	_resend_btn = null
 	_code_edit = null
