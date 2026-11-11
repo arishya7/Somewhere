@@ -31,3 +31,7 @@ window/size/window_height_override=900
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+
+[somewhere]
+
+server_url="wss://somewhere-ad55.onrender.com"
