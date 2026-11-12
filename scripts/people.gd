@@ -181,9 +181,9 @@ static func tag(p: Dictionary) -> String:
 	var t := "%s, %d  ·  %s" % [p.name, int(p.age), p.get("pronouns", "")]
 	var n := shared_interests(p).size()
 	if n > 0:
-		t += "  ·  ✦ %d in common" % n
+		t += "  ·  ◆ %d in common" % n
 	elif shared_with_me(p) >= 2:
-		t += "  ·  ✦ similar vibe"
+		t += "  ·  ◆ similar vibe"
 	return t
 
 

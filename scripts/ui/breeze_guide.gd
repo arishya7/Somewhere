@@ -53,7 +53,7 @@ func _ready() -> void:
 	titles.add_child(UI.eyebrow("Your guide", UI.GOLD))
 	titles.add_child(UI.title("The Breeze", 34))
 	head.add_child(titles)
-	var close := UI.button("✕", "TextButton")
+	var close := UI.button("×", "TextButton")
 	close.pressed.connect(_close)
 	head.add_child(close)
 	v.add_child(UI.label("I only answer questions about Somewhere. I suggest places, never people. Who you meet is up to you.", 13, UI.FAINT))

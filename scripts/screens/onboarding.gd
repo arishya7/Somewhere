@@ -176,7 +176,7 @@ func _prev() -> void:
 
 
 func _privacy(text: String) -> void:
-	var l := UI.label("🔒  " + text, 13, UI.FAINT)
+	var l := UI.label("Private  ·  " + text, 13, UI.FAINT)
 	_content.add_child(l)
 
 
@@ -581,7 +581,7 @@ func _step_interests() -> void:
 		for c in picked.get_children():
 			c.queue_free()
 		for item in Profile.data.interests:
-			var x := UI.button(item + "   ✕", "Chip")
+			var x := UI.button(item + "   ×", "Chip")
 			x.add_theme_stylebox_override("normal", UI.box(UI.CREAM, 12, Color(0, 0, 0, 0), 0, 14, 7))
 			x.add_theme_color_override("font_color", UI.INK)
 			x.add_theme_color_override("font_hover_color", UI.INK)
@@ -692,7 +692,7 @@ func _build_photo_grid() -> void:
 			tr.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 			tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			mask.add_child(tr)
-			var remove := UI.button("✕")
+			var remove := UI.button("×")
 			remove.add_theme_font_size_override("font_size", 13)
 			for st in ["normal", "hover", "pressed"]:
 				remove.add_theme_stylebox_override(st, UI.box(Color(0, 0, 0, 0.55), 14, Color(0, 0, 0, 0), 0, 9, 4))

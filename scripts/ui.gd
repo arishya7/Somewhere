@@ -52,6 +52,9 @@ static func _bundled(kind: String, weight: int, italic := false) -> Font:
 		if kind == "serif":
 			axes[ts.name_to_tag("SOFT")] = 50 # a little softer, warmer serif
 		f.variation_opentype = axes
+		if kind == "serif":
+			# Headlines borrow symbols (★ ♥ → ✓) from the sans when the serif doesn't have them.
+			f.fallbacks = [_bundled("sans", weight, italic)]
 		_fonts[key] = f
 	return _fonts[key]
 

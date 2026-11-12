@@ -40,7 +40,7 @@ func _ready() -> void:
 	head.add_child(titles)
 	titles.add_child(UI.eyebrow("Online now", UI.GOLD))
 	titles.add_child(UI.title("Who's on", 32))
-	var close := UI.button("✕", "TextButton")
+	var close := UI.button("×", "TextButton")
 	close.pressed.connect(queue_free)
 	head.add_child(close)
 	_note = UI.label("", 14, UI.MUTED)

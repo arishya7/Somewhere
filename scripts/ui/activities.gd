@@ -177,7 +177,7 @@ func _header(title: String) -> void:
 	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	left.add_child(UI.eyebrow(ACTIONS.get(kind, "") + "  ·  " + venue, UI.GOLD))
 	row.add_child(left)
-	var close := UI.button("✕", "TextButton")
+	var close := UI.button("×", "TextButton")
 	close.pressed.connect(_close)
 	row.add_child(close)
 	_body.add_child(UI.title(title, 30))

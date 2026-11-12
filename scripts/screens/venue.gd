@@ -886,7 +886,13 @@ func _draw_props(_s: Vector2) -> void:
 		var pulse := 0.5 + 0.5 * sin(_t * 2.5 + i)
 		_glow(p, 46.0, Color(1.0, 0.9, 0.6, 0.25 + 0.2 * pulse), 6)
 		draw_circle(p, 16.0, Color(UI.CREAM, 0.95))
-		draw_string(UI.font(800), p + Vector2(-16, 6), "✦", HORIZONTAL_ALIGNMENT_CENTER, 32, 16, UI.INK)
+		# A four-pointed sparkle, drawn (web builds have no font fallback for ✦).
+		var spark := PackedVector2Array()
+		for k in 8:
+			var r := 9.0 if k % 2 == 0 else 2.6
+			var ang := -PI / 2.0 + k * PI / 4.0
+			spark.append(p + Vector2(cos(ang), sin(ang)) * r)
+		draw_colored_polygon(spark, UI.INK)
 		var label: String = props[i][0]
 		var lw := UI.font(500).get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x + 24
 		var a := 1.0 if i == _hover_prop else 0.75
@@ -958,7 +964,7 @@ func _popover_card(title: String, body: String, actions: Array) -> void:
 	var t := UI.title(title, 26)
 	t.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(t)
-	var x := UI.button("✕", "TextButton")
+	var x := UI.button("×", "TextButton")
 	x.pressed.connect(_close_popover)
 	head.add_child(x)
 	if body != "":
