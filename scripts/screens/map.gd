@@ -79,6 +79,31 @@ var _dock: Control
 var _best := 0
 var _panel_box: VBoxContainer
 var _online: Label
+var _faces: HBoxContainer
+var _faces_clock := 0.0
+
+
+func _rebuild_faces() -> void:
+	if _faces == null:
+		return
+	for c in _faces.get_children():
+		c.queue_free()
+	var handles := Net.players.keys()
+	handles.sort()
+	for h in handles.slice(0, 7):
+		var person := Net.person_for(h)
+		var b := Button.new()
+		b.flat = true
+		b.focus_mode = Control.FOCUS_NONE
+		b.custom_minimum_size = Vector2(38, 38)
+		b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		b.tooltip_text = "@%s  ·  %s" % [h, Net.where_text(h)]
+		var ring := UI.FAINT if Net.is_resting(h) else UI.SAGE
+		b.draw.connect(func() -> void: Avatar.draw_portrait(b, person.cfg, b.size / 2.0, 16.0, ring, 0.0))
+		b.pressed.connect(func() -> void: load("res://scripts/ui/whos_on.gd").open(self))
+		_faces.add_child(b)
+	if handles.size() > 7:
+		_faces.add_child(UI.label("+%d" % (handles.size() - 7), 14, UI.MUTED, 600))
 var _toasts: VBoxContainer
 var _font: Font
 var _font_bold: Font
@@ -360,6 +385,13 @@ func _build_ui() -> void:
 	_online = UI.label("", 16, UI.CREAM, 600)
 	_online.autowrap_mode = TextServer.AUTOWRAP_OFF
 	on_row.add_child(_online)
+	# Everyone online, as faces you can tap (they might be on the map too, with nowhere to stand).
+	_faces = HBoxContainer.new()
+	_faces.add_theme_constant_override("separation", 4)
+	on_row.add_child(_faces)
+	_rebuild_faces()
+	Net.roster_changed.connect(_rebuild_faces)
+	tree_exiting.connect(func() -> void: Net.roster_changed.disconnect(_rebuild_faces))
 
 	var legend := PanelContainer.new()
 	legend.add_theme_stylebox_override("panel", UI.box(UI.PANEL, 16, Color(1, 1, 1, 0.08), 1, 16, 12))
@@ -597,7 +629,11 @@ func _process(delta: float) -> void:
 	if Profile.DEMO_PEOPLE:
 		_online.text = "%d here now" % (_people.size() + 1) + ("  ·  %d friends" % Net.players.size() if Net.is_online() else "")
 	else:
-		_online.text = ("%d here now" % (Net.players.size() + 1)) if Net.is_online() else "Just you  ·  not connected"
+		_online.text = ("%d here now" % (Net.players.size() + 1)) if Net.is_online() else "Just you  ·  connecting…"
+	_faces_clock -= delta
+	if _faces_clock <= 0.0:
+		_faces_clock = 3.0
+		_rebuild_faces()
 	queue_redraw()
 
 

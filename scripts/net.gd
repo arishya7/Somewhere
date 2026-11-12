@@ -327,6 +327,8 @@ func set_resting(resting: bool) -> void:
 	if bool(_presence.get("resting", false)) == resting:
 		return
 	_presence = _presence.duplicate()
+	if not _presence.has("screen"):
+		_presence.screen = "shore"
 	_presence.resting = resting
 	_presence_dirty = true
 
@@ -598,9 +600,10 @@ func where_text(handle: String) -> String:
 		"venue": at = "at %s, %s" % [spot, place]
 		"district": at = ("in %s, %s" % [spot, place]) if spot != "" else "walking around %s" % place
 		"map": at = "looking at the map"
+		"shore": at = "at the Shore"
 		_: at = "just arrived"
 	if bool(pr.get("resting", false)):
-		at = "resting at the Shore (last seen %s)" % at
+		at = "resting at the Shore" + ("" if str(pr.get("screen", "")) in ["shore", ""] else " (last seen %s)" % at)
 	return at
 
 
