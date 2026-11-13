@@ -210,7 +210,20 @@ func _on_join() -> void:
 	_invite(target)
 
 
+const INVITE_COOLDOWN := 15.0
+var _invited_at := {} # handle -> time of last invite
+
+
 func _invite(handle: String) -> void:
+	# One invite at a time, and not again to the same person for a little while.
+	var now := Time.get_ticks_msec() / 1000.0
+	if _invite_seed != 0 and now - float(_invited_at.get(handle, -100.0)) < INVITE_COOLDOWN:
+		get_parent().toast("Already asked @%s. Give them a moment to answer." % handle)
+		return
+	if now - float(_invited_at.get(handle, -100.0)) < INVITE_COOLDOWN:
+		get_parent().toast("You just asked @%s. Try again in a few seconds." % handle)
+		return
+	_invited_at[handle] = now
 	_invite_seed = randi() % 1000000 + 1
 	Net.send_invite(handle, _name, _invite_seed)
 	get_parent().toast("Asked @%s to play. Waiting for them to say yes…" % handle)
@@ -372,6 +385,11 @@ func _listen_for_invites() -> void:
 			if venue_name == _name:
 				Net.reply_invite(handle, false, seed)
 			return
+		# Only ever one invite card on screen; repeats from the same person are ignored.
+		if _invite_from != "" :
+			if _invite_from != handle:
+				Net.reply_invite(handle, false, seed)
+			return
 		_invite_card(handle, seed)
 	var on_answer := func(handle: String, yes: bool, seed: int) -> void:
 		if seed != _invite_seed:
@@ -389,9 +407,14 @@ func _listen_for_invites() -> void:
 		Net.invite_answered.disconnect(on_answer))
 
 
+var _invite_from := ""
+
+
 func _invite_card(handle: String, seed: int) -> void:
 	var person := Net.person_for(handle)
 	var overlay := Control.new()
+	_invite_from = handle
+	overlay.tree_exiting.connect(func() -> void: _invite_from = "")
 	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(overlay)
 	UI.scrim(overlay)

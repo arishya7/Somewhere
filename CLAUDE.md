@@ -85,6 +85,13 @@ thrift try-on, record listening via `scripts/synth.gd`, Star Catcher arcade, dan
 - Quests with a real match: `Profile.quest_partner` skips real people (they move on their own);
   `Profile.real_quest_partner(place)` drives the gold ★ tags and "Tell @x you're here" (sends a chat message).
 
+- Close kindly with a real person sends the goodbye over the network, then `unmatch` (relay drops both follows and
+  tells them `unmatched`). Closed conversations drop any incoming chat client-side too. After every (re)connect,
+  clients re-follow open matches (`Net._refollow`) because the relay keeps no state.
+- Invites: 15 s cooldown per person and one invite card at a time. Live games with a real person show
+  `scripts/ui/quick_chat.gd` beside the game (chat only between matches).
+- Voice: noise gate (`GATE_LEVEL`), averaged downsampling, jitter buffer (`_drain_voice`), and push-to-talk in the call bar.
+
 ## Data boundaries
 `scripts/validate.gd`: name, handle, per-country phone length, email, real-date birthday 18–99, text limits, photo limits.
 

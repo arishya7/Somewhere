@@ -15,6 +15,7 @@ signal invite_answered(handle: String, yes: bool, seed: int)
 signal play_received(handle: String, round: int, choice: int)
 
 const Validate = preload("res://scripts/validate.gd")
+const UI = preload("res://scripts/ui.gd")
 const PORT := 9080
 const BUFFER := 8 * 1024 * 1024
 const MAX_PHOTOS := 3
@@ -40,6 +41,15 @@ const VOICE_RATE := 16000
 var call_with := ""
 var call_state := "idle" # idle, ringing_out, ringing_in, active
 var muted := false
+## Push to talk: only send your voice while talking is held (button or Space).
+var push_to_talk := false
+var talking := false
+var _gate_open_for := 0.0 # seconds the noise gate stays open after you stop speaking
+var _jitter := PackedVector2Array()
+var _jitter_started := false
+const GATE_LEVEL := 0.018 # below this loudness, a chunk counts as background noise
+const GATE_HOLD := 0.35
+const JITTER_START := 0.12 # buffer this much before playing, to smooth network hiccups
 var _mic_player: AudioStreamPlayer
 var _capture: AudioEffectCapture
 var _voice_player: AudioStreamPlayer
@@ -248,6 +258,14 @@ func _relay(id: int, msg: Dictionary) -> void:
 					out.round = clampi(int(msg.get("round", 0)), 0, 20)
 					out.choice = clampi(int(msg.get("choice", 0)), 0, 8)
 			_send_to(target, out)
+		"unmatch":
+			# Closing kindly ends the connection for both people: no more chat, quests or calls.
+			var to := str(msg.get("to", ""))
+			p.follows.erase(to)
+			var target := _peer_by_handle(to)
+			if target >= 0:
+				_peers[target].follows.erase(p.handle)
+				_send_to(target, {"t": "unmatched", "from": p.handle})
 		"chat":
 			var to := str(msg.get("to", ""))
 			var text := str(msg.get("text", "")).strip_edges().left(Validate.MAX_MESSAGE)
@@ -341,6 +359,18 @@ func follow(handle: String) -> void:
 	_send({"t": "follow", "to": handle})
 
 
+func send_unmatch(handle: String) -> void:
+	_send({"t": "unmatch", "to": handle})
+
+
+## After (re)connecting the server has forgotten who matched: follow every open match again.
+func _refollow() -> void:
+	for id in Profile.data.get("matches", {}):
+		var m: Dictionary = Profile.data.matches[id]
+		if str(id).begins_with("net:") and not m.get("closed", false):
+			_send({"t": "follow", "to": str(id).substr(4)})
+
+
 func send_chat(handle: String, text: String) -> void:
 	_send({"t": "chat", "to": handle, "text": text})
 
@@ -419,6 +449,9 @@ func _begin_audio() -> void:
 	_voice_player.play()
 	_playback = _voice_player.get_stream_playback()
 	_outgoing.clear()
+	_jitter.clear()
+	_jitter_started = false
+	_gate_open_for = 0.0
 
 
 func _stop_audio() -> void:
@@ -438,13 +471,32 @@ func _pump_voice() -> void:
 	if frames <= 0:
 		return
 	var buf := _capture.get_buffer(frames)
-	if muted:
+	if muted or (push_to_talk and not talking):
+		_outgoing.clear()
 		return
+	# Noise gate: skip chunks that are only room noise (with a short hold so words aren't clipped).
+	var energy := 0.0
+	for f in buf:
+		energy += (f.x + f.y) * (f.x + f.y) * 0.25
+	var rms := sqrt(energy / maxf(1.0, buf.size()))
+	var dt := float(buf.size()) / AudioServer.get_mix_rate()
+	if rms > GATE_LEVEL or push_to_talk:
+		_gate_open_for = GATE_HOLD
+	else:
+		_gate_open_for -= dt
+	if _gate_open_for <= 0.0:
+		_outgoing.clear()
+		return
+	# Downsample by averaging each window (a simple low-pass), instead of skipping samples (harsh aliasing).
 	var step := AudioServer.get_mix_rate() / VOICE_RATE
 	var i := 0.0
-	while i < buf.size():
-		var f: Vector2 = buf[int(i)]
-		var v := int(clampf((f.x + f.y) * 0.5, -1.0, 1.0) * 32000.0)
+	while i + step <= buf.size():
+		var acc := 0.0
+		var n := 0
+		for k in range(int(i), int(i + step)):
+			acc += (buf[k].x + buf[k].y) * 0.5
+			n += 1
+		var v := int(clampf(acc / maxf(1, n), -1.0, 1.0) * 32000.0)
 		_outgoing.append(v & 0xFF)
 		_outgoing.append((v >> 8) & 0xFF)
 		i += step
@@ -458,14 +510,29 @@ func _play_voice(b64: String) -> void:
 		return
 	var raw := Marshalls.base64_to_raw(b64)
 	var n := raw.size() / 2
-	if not _playback.can_push_buffer(n):
-		return
-	var frames := PackedVector2Array()
-	frames.resize(n)
 	for k in n:
 		var v := raw.decode_s16(k * 2) / 32000.0
-		frames[k] = Vector2(v, v)
-	_playback.push_buffer(frames)
+		_jitter.append(Vector2(v, v))
+	# Too far behind: drop the oldest audio rather than drifting into a delay.
+	if _jitter.size() > VOICE_RATE:
+		_jitter = _jitter.slice(_jitter.size() - VOICE_RATE / 4)
+
+
+## Feed buffered voice to the speaker; wait for a small cushion first so hiccups don't crackle.
+func _drain_voice() -> void:
+	if _playback == null:
+		return
+	if not _jitter_started:
+		if _jitter.size() < int(VOICE_RATE * JITTER_START):
+			return
+		_jitter_started = true
+	var room := _playback.get_frames_available()
+	var take := mini(room, _jitter.size())
+	if take > 0:
+		_playback.push_buffer(_jitter.slice(0, take))
+		_jitter = _jitter.slice(take)
+	if _jitter.is_empty():
+		_jitter_started = false
 
 
 func request_photos(handle: String) -> void:
@@ -511,6 +578,7 @@ func _receive(msg: Dictionary) -> void:
 			# A fresh connection: tell the server where we are again, or friends see us nowhere.
 			_presence_dirty = true
 			_presence_clock = 0.0
+			_refollow()
 			for r in msg.get("roster", []):
 				players[r.handle] = {"profile": r.profile, "presence": r.presence, "photos": []}
 			roster_changed.emit()
@@ -520,6 +588,10 @@ func _receive(msg: Dictionary) -> void:
 			_toast(str(msg.get("msg", "Couldn't join.")))
 		"joined":
 			players[msg.handle] = {"profile": msg.profile, "presence": {}, "photos": []}
+			# They may be a match who reconnected: re-follow so chat flows again.
+			var mid := person_id(msg.handle)
+			if Profile.data.matches.has(mid) and not Profile.data.matches[mid].get("closed", false):
+				follow(msg.handle)
 			roster_changed.emit()
 			_toast("%s (@%s) just joined." % [msg.profile.get("name", ""), msg.handle])
 		"left":
@@ -537,7 +609,11 @@ func _receive(msg: Dictionary) -> void:
 						texs.append(ImageTexture.create_from_image(img))
 				players[msg.handle].photos = texs
 				roster_changed.emit()
+		"unmatched":
+			Profile.closed_by_them(person_id(str(msg.get("from", ""))))
 		"match":
+			if Profile.data.matches.has(person_id(msg.handle)):
+				return # Already matched: this is just a re-follow after reconnecting.
 			var person := person_for(msg.handle)
 			var where: String = Profile.data.get("following", {}).get(person.id, {}).get("where", "Somewhere")
 			Profile.add_match(person, where)
@@ -575,9 +651,46 @@ func _receive(msg: Dictionary) -> void:
 				_play_voice(str(msg.pcm))
 		"chat":
 			var id := person_id(msg.from)
-			if Profile.data.matches.has(id):
-				Profile.add_message(id, false, str(msg.text).left(Validate.MAX_MESSAGE))
-				chat_received.emit(id, msg.text)
+			# Closed conversations receive nothing, even if the other side keeps sending.
+			if Profile.data.matches.has(id) and not Profile.data.matches[id].get("closed", false):
+				var text := str(msg.text).left(Validate.MAX_MESSAGE)
+				Profile.add_message(id, false, text)
+				chat_received.emit(id, text)
+				if text == Profile.CLOSE_KINDLY_TEXT:
+					Profile.closed_by_them(id)
+					_closed_card(Profile.data.matches[id].person)
+
+
+## Make sure a goodbye is seen, not buried in a chat list.
+func _closed_card(person: Dictionary) -> void:
+	var app := get_tree().root.get_node_or_null("App")
+	if app == null or app.current == null:
+		return
+	var overlay := Control.new()
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	app.current.add_child(overlay)
+	UI.scrim(overlay)
+	var card := PanelContainer.new()
+	card.theme_type_variation = "Card"
+	card.anchor_left = 0.5
+	card.anchor_right = 0.5
+	card.anchor_top = 0.5
+	card.anchor_bottom = 0.5
+	card.offset_left = -260
+	card.offset_right = 260
+	card.offset_top = -170
+	card.offset_bottom = 170
+	overlay.add_child(card)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 12)
+	card.add_child(v)
+	v.add_child(UI.eyebrow("A kind goodbye", UI.GOLD))
+	v.add_child(UI.title("%s closed your conversation" % person.get("name", "Someone"), 28))
+	v.add_child(UI.label("\"%s\"" % Profile.CLOSE_KINDLY_TEXT, 15, UI.CREAM))
+	v.add_child(UI.label("It isn't about you being wrong for anyone. The chat is now closed on both sides.", 13, UI.MUTED))
+	var ok := UI.button("Okay", "PrimaryButton")
+	ok.pressed.connect(overlay.queue_free)
+	v.add_child(ok)
 
 
 func _toast(text: String) -> void:
@@ -658,6 +771,7 @@ func _process(delta: float) -> void:
 					_receive(msg)
 			if call_state == "active":
 				_pump_voice()
+				_drain_voice()
 			# Keep the connection warm so hosting proxies don't drop quiet players.
 			_ping_in -= delta
 			if _ping_in <= 0.0:

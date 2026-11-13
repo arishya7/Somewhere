@@ -152,6 +152,7 @@ func _ready() -> void:
 	_body.add_theme_constant_override("separation", 14)
 	_card.add_child(_body)
 	if _real():
+		load("res://scripts/ui/quick_chat.gd").attach(self, _card, companion)
 		_moment()
 		return
 	match kind:

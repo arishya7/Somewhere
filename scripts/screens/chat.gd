@@ -319,7 +319,7 @@ func _render_thread() -> void:
 		note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		_thread.add_child(note)
 	if m.get("closed", false):
-		var closed := UI.label("You closed this conversation kindly.", 13, UI.FAINT)
+		var closed := UI.label(("%s closed this conversation kindly. Nothing more can be sent either way." % m.person.name) if m.get("closed_by", "me") == "them" else "You closed this conversation kindly. Nothing more can be sent either way.", 13, UI.FAINT)
 		closed.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		_thread.add_child(closed)
 	_input.editable = not m.get("closed", false)
@@ -608,6 +608,20 @@ func _call_bar(person: Dictionary) -> void:
 		Net.muted = not Net.muted
 		mute.text = "Unmute" if Net.muted else "Mute")
 	row.add_child(mute)
+	# Noisy room? Push to talk only sends your voice while you hold the button.
+	var ptt := UI.button("Push to talk: off")
+	ptt.tooltip_text = "Only send your voice while you hold Talk. Good for noisy places."
+	var hold := UI.button("Hold to talk", "PrimaryButton")
+	hold.visible = false
+	hold.button_down.connect(func() -> void: Net.talking = true)
+	hold.button_up.connect(func() -> void: Net.talking = false)
+	ptt.pressed.connect(func() -> void:
+		Net.push_to_talk = not Net.push_to_talk
+		Net.talking = false
+		ptt.text = "Push to talk: on" if Net.push_to_talk else "Push to talk: off"
+		hold.visible = Net.push_to_talk and Net.call_state == "active")
+	row.add_child(ptt)
+	row.add_child(hold)
 	var end := UI.button("End call", "PrimaryButton")
 	end.pressed.connect(func() -> void: Net.end_call())
 	row.add_child(end)
@@ -618,6 +632,8 @@ func _call_bar(person: Dictionary) -> void:
 		var mine: bool = person.get("handle", "") == Net.call_with
 		_call_box.visible = mine and st != "idle"
 		mute.visible = st == "active"
+		ptt.visible = st == "active"
+		hold.visible = st == "active" and Net.push_to_talk
 		if st == "active":
 			started[0] = Time.get_ticks_msec() / 1000.0
 		label.text = {"ringing_out": "Calling %s..." % person.name, "ringing_in": "%s is calling" % person.name, "active": "On a call with %s" % person.name}.get(st, "")

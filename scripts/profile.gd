@@ -343,7 +343,24 @@ func close_kindly(person_id: String) -> void:
 		return
 	add_message(person_id, true, CLOSE_KINDLY_TEXT)
 	m.closed = true
+	m.closed_by = "me"
 	save()
+	# Real people: actually send the goodbye, then end the connection on the server so nothing else gets through.
+	if person_id.begins_with("net:"):
+		var handle := person_id.substr(4)
+		Net.send_chat(handle, CLOSE_KINDLY_TEXT)
+		Net.send_unmatch(handle)
+
+
+## The other person closed the conversation with you.
+func closed_by_them(person_id: String) -> void:
+	var m: Dictionary = data.matches.get(person_id, {})
+	if m.is_empty() or m.get("closed", false):
+		return
+	m.closed = true
+	m.closed_by = "them"
+	save()
+	closed_changed.emit(person_id)
 
 
 ## Checks every conversation. Returns events for the app to show:
