@@ -486,6 +486,20 @@ func _add_photo_image(img: Image) -> bool:
 	return true
 
 
+## Delete everything about you on this device: profile, photos, matches, messages. Can't be undone.
+func delete_everything() -> void:
+	# Tell real matches the connection is over, so the server stops passing anything between you.
+	for id in data.get("matches", {}).keys():
+		if str(id).begins_with("net:"):
+			Net.send_unmatch(str(id).substr(4))
+	for path in data.get("photos", []):
+		DirAccess.remove_absolute(path)
+	DirAccess.remove_absolute(PHOTO_DIR)
+	DirAccess.remove_absolute(SAVE_PATH)
+	reset()
+	Net.leave_client()
+
+
 func remove_photo(i: int) -> void:
 	if i < 0 or i >= photos.size():
 		return

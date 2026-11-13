@@ -283,6 +283,50 @@ func _self_actions(right: VBoxContainer) -> void:
 			app.go("onboarding", {"step": 9, "edit": true}))
 	actions.add_child(edit)
 	right.add_child(UI.label("Your phone number, email and birthday are never shown to anyone.", 12, UI.FAINT))
+	var del := UI.button("Delete my profile", "TextButton")
+	del.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	del.add_theme_color_override("font_color", UI.ROSE)
+	del.pressed.connect(_confirm_delete)
+	right.add_child(del)
+
+
+func _confirm_delete() -> void:
+	var overlay := Control.new()
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(overlay)
+	UI.scrim(overlay)
+	var card := PanelContainer.new()
+	card.theme_type_variation = "Card"
+	card.anchor_left = 0.5
+	card.anchor_right = 0.5
+	card.anchor_top = 0.5
+	card.anchor_bottom = 0.5
+	card.offset_left = -250
+	card.offset_right = 250
+	card.offset_top = -150
+	card.offset_bottom = 150
+	overlay.add_child(card)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 12)
+	card.add_child(v)
+	v.add_child(UI.title("Delete your profile?", 28))
+	v.add_child(UI.label("This removes your profile, photos, matches and messages from this device, and ends your connections with matches. It can't be undone.", 15, UI.MUTED))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	v.add_child(row)
+	var keep := UI.button("Keep it")
+	keep.pressed.connect(overlay.queue_free)
+	row.add_child(keep)
+	var yes := UI.button("Delete everything", "PrimaryButton")
+	yes.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	yes.pressed.connect(func() -> void:
+		Profile.delete_everything()
+		var app := get_tree().root.get_node_or_null("App")
+		queue_free()
+		if app:
+			app.go("landing")
+			app.toast("Your profile is deleted. You can start fresh any time."))
+	row.add_child(yes)
 
 
 func _flip(dir: int) -> void:
