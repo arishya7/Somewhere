@@ -153,8 +153,14 @@ func _ready() -> void:
 	_card.add_child(_body)
 	if _real():
 		load("res://scripts/ui/quick_chat.gd").attach(self, _card, companion)
-		_moment()
-		return
+		var on_rt := func(h: String, d: Array) -> void:
+			if h == companion.get("handle", ""):
+				_on_rt(d)
+		Net.rt_received.connect(on_rt)
+		tree_exiting.connect(func() -> void: Net.rt_received.disconnect(on_rt))
+		if not kind in ["records", "arcade", "club"]:
+			_moment()
+			return
 	match kind:
 		"thrift": _thrift()
 		"records": _records()
@@ -215,7 +221,7 @@ func _canvas_area(h: float, draw_cb: Callable) -> Control:
 	var frame := Panel.new()
 	frame.custom_minimum_size = Vector2(0, h)
 	frame.add_theme_stylebox_override("panel", UI.box(Color("#120C1A"), 16))
-	frame.clip_children = CanvasItem.CLIP_CHILDREN_AND_DRAW
+	frame.clip_contents = true
 	_body.add_child(frame)
 	_canvas = Control.new()
 	_canvas.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -280,7 +286,7 @@ func _process(delta: float) -> void:
 	if kind == "arcade" and _game.get("running", false):
 		_arcade_step(delta)
 	if kind == "club" and _game.get("running", false):
-		if Time.get_ticks_msec() / 1000.0 - _game.start > 21.0:
+		if _club_time() > 21.0 or _now() - _game.start > 24.0:
 			_game.running = false
 			_club_done()
 	if _canvas and is_instance_valid(_canvas):
@@ -519,17 +525,26 @@ func _thrift() -> void:
 
 
 # --- Record store: listening station ---------------------------------------------------
+# With a real person it's shared listening: whoever puts a record on, it plays for both of you.
+
+var _played := []
+var _their_plays := []
+var _favourite := []
+
 
 func _records() -> void:
 	_clear()
 	_header("Put on a record.")
-	_companion("Headphones are clean, I checked. Play one?")
-	var favourite: Array = RECORDS[_rng.randi() % RECORDS.size()]
+	if _real():
+		_companion("Shared headphones with @%s: whatever either of you puts on plays for both." % companion.handle)
+	else:
+		_companion("Headphones are clean, I checked. Play one?")
+	_favourite = RECORDS[_rng.randi() % RECORDS.size()]
 	var grid := GridContainer.new()
+	grid.name = "Records"
 	grid.columns = 4
 	grid.add_theme_constant_override("h_separation", 12)
 	_body.add_child(grid)
-	var played := []
 	_game = {"playing": -1, "since": 0.0}
 	for i in RECORDS.size():
 		var r: Array = RECORDS[i]
@@ -542,23 +557,16 @@ func _records() -> void:
 			var cover := Rect2(10, 0, s.x - 20, s.x - 20)
 			b.draw_rect(cover, r[1])
 			var c := cover.get_center()
-			var spin: float = (Time.get_ticks_msec() / 1000.0 - _game.since) * 3.0 if _game.playing == i else 0.0
+			var spin: float = (_now() - _game.since) * 3.0 if _game.playing == i else 0.0
 			b.draw_circle(c, cover.size.x * 0.32, Color("#0E0E0E"))
 			b.draw_arc(c, cover.size.x * 0.22, spin, spin + 1.2, 12, Color(1, 1, 1, 0.2), 2.0, true)
 			b.draw_circle(c, cover.size.x * 0.08, r[1].lightened(0.3))
 			b.draw_string(UI.font(500), Vector2(0, s.y - 26), r[0], HORIZONTAL_ALIGNMENT_CENTER, s.x, 14, UI.CREAM)
 			b.draw_string(UI.font(500), Vector2(0, s.y - 6), "▶  Playing" if _game.playing == i else "▶  Listen", HORIZONTAL_ALIGNMENT_CENTER, s.x, 12, UI.GOLD if _game.playing == i else UI.MUTED))
 		b.pressed.connect(func() -> void:
-			_player.stream = Synth.melody(r[4], r[2], r[3])
-			_player.play()
-			_game.playing = i
-			_game.since = Time.get_ticks_msec() / 1000.0
-			if not r[0] in played:
-				played.append(r[0])
-			if r == favourite:
-				_bubble.text = "Oh, THIS one. I'd play this on a long drive."
-			else:
-				_bubble.text = ["Not bad. A bit sleepy?", "My dad would love this.", "Okay, the bassline is good.", "Play the next one!"][_rng.randi() % 4])
+			_play_record(i, true)
+			if _real():
+				Net.send_rt(companion.handle, [3, i]))
 		grid.add_child(b)
 	_canvas = Control.new()
 	_canvas.custom_minimum_size = Vector2(0, 1)
@@ -567,104 +575,306 @@ func _records() -> void:
 			c.queue_redraw())
 	_body.add_child(_canvas)
 	_spacer()
-	var done := _primary("Pick a favourite", func() -> void: pass)
+	var done := _primary("Done listening" if _real() else "Pick a favourite", func() -> void: pass)
 	done.pressed.connect(func() -> void:
 		_player.stop()
-		_fact("Would play %s on a long drive" % favourite[0].to_lower())
-		_fact("Listened to %d records with you" % maxi(1, played.size()))
+		if _real():
+			if not _their_plays.is_empty():
+				_fact("Put on %s for you" % ", ".join(_their_plays.map(func(t: String) -> String: return t.to_lower())))
+			_fact("Listened to %d records with you" % maxi(1, _played.size()))
+		else:
+			_fact("Would play %s on a long drive" % _favourite[0].to_lower())
+			_fact("Listened to %d records with you" % maxi(1, _played.size()))
 		_finish("Good taste."))
 
 
+func _play_record(i: int, mine: bool) -> void:
+	if i < 0 or i >= RECORDS.size() or not is_instance_valid(_player):
+		return
+	var r: Array = RECORDS[i]
+	_player.stream = Synth.record(i, r)
+	_player.play()
+	_game.playing = i
+	_game.since = _now()
+	if not r[0] in _played:
+		_played.append(r[0])
+	if _real():
+		if not mine and not r[0] in _their_plays:
+			_their_plays.append(r[0])
+		_bubble.text = "You put on %s." % r[0] if mine else "@%s put on %s." % [companion.handle, r[0]]
+	elif r == _favourite:
+		_bubble.text = "Oh, THIS one. I'd play this on a long drive."
+	else:
+		_bubble.text = ["Not bad. A bit sleepy?", "My dad would love this.", "Okay, the bassline is good.", "Play the next one!"][_rng.randi() % 4]
+
+
 # --- Arcade: air hockey, you vs them ---------------------------------------------------
+# Coordinates are 0..1 across the table; you are always on the left, they are on the right.
+# With a real person exactly one side is in charge of the puck at a time ("owner"): you take it
+# when it crosses into your half or when your mallet touches it, and hand it over when it leaves.
+# Only the owner can score a goal against themselves, so both screens always agree on the score.
 
 const GOALS_TO_WIN := 5
+const NET_HZ := 20.0
+const REACH_ME := 0.125
+const REACH_THEM := 0.11
 
 
 func _arcade_intro() -> void:
 	_clear()
-	_header("Air hockey. You versus %s." % companion.name)
-	_companion("First to %d. Move your mallet with the mouse (or arrow keys). No pressure, it's just for fun." % GOALS_TO_WIN)
+	_header("Air hockey. You versus %s." % ("@" + companion.handle if _real() else companion.name))
+	if _real():
+		_companion("Live with @%s. First to %d. Move your mallet with the mouse, a finger, or the arrow keys." % [companion.handle, GOALS_TO_WIN])
+	else:
+		_companion("First to %d. Move your mallet with the mouse (or arrow keys). No pressure, it's just for fun." % GOALS_TO_WIN)
 	_game = {"running": false, "you": 0, "them": 0, "puck": Vector2(0.5, 0.5), "vel": Vector2.ZERO,
 		"me": Vector2(0.15, 0.5), "me_prev": Vector2(0.15, 0.5), "ai": Vector2(0.85, 0.5), "ai_prev": Vector2(0.85, 0.5),
-		"target": Vector2(0.15, 0.5), "pause": 0.0, "skill": 0.3 + 0.15 * _rng.randf()}
-	var frame := _canvas_area(400, _draw_arcade)
-	frame.custom_minimum_size.y = 400
+		"ai_target": Vector2(0.85, 0.5), "target": Vector2(0.15, 0.5), "pause": 0.0, "skill": 0.3 + 0.15 * _rng.randf(),
+		"ready_me": false, "ready_them": false, "last_rx": 0.0, "send_clock": 0.0, "over": false,
+		"owner": false, "handoff": false, "claim_at": -10.0, "heard_owner_at": 0.0}
+	_canvas_area(400, _draw_arcade)
 	_canvas.mouse_filter = Control.MOUSE_FILTER_STOP
 	_canvas.gui_input.connect(func(e: InputEvent) -> void:
-		if e is InputEventMouseMotion and _canvas.size.x > 0:
+		if (e is InputEventMouseMotion or e is InputEventScreenDrag or e is InputEventScreenTouch or e is InputEventMouseButton) and _canvas.size.x > 0:
 			_game.target = Vector2(e.position.x / _canvas.size.x, e.position.y / _canvas.size.y))
 	_spacer()
 	var start := _primary("Face off", func() -> void: pass)
 	start.pressed.connect(func() -> void:
-		if not _game.running:
-			_game.running = true
-			_serve(-1.0)
-			start.visible = false)
+		start.visible = false
+		# Arrow keys shouldn't wander around the buttons (or type into chat) while you play.
+		get_viewport().gui_release_focus()
+		if _real():
+			_game.ready_me = true
+			_game.last_rx = _now()
+			Net.send_rt(companion.handle, [2])
+			if _game.ready_them:
+				_arcade_begin()
+			else:
+				_bubble.text = "Waiting for @%s to press Face off…" % companion.handle
+		else:
+			_arcade_begin())
 
 
-func _serve(towards: float) -> void:
+func _now() -> float:
+	return Time.get_ticks_msec() / 1000.0
+
+
+func _arcade_begin() -> void:
+	if _game.running or _game.over:
+		return
+	_game.running = true
+	_game.last_rx = _now()
+	if _real():
+		_bubble.text = "Game on. First to %d." % GOALS_TO_WIN
+		# Both screens serve the same way: towards whoever's handle comes first.
+		var mine := str(Profile.data.get("handle", ""))
+		var vy := (float(absi(seed) % 100) / 100.0 - 0.5) * 0.3
+		_serve(-1.0 if mine < str(companion.handle) else 1.0, vy)
+	else:
+		_serve(-1.0)
+
+
+func _serve(towards: float, vy := INF) -> void:
 	_game.puck = Vector2(0.5, 0.5)
-	_game.vel = Vector2(towards * 0.25, _rng.randf_range(-0.15, 0.15))
+	_game.vel = Vector2(towards * 0.25, _rng.randf_range(-0.15, 0.15) if vy == INF else vy)
 	_game.pause = 0.8
+	# The puck heads into one half; that player is in charge of it.
+	_game.owner = towards < 0.0
+	_game.heard_owner_at = _now()
+
+
+func _arcade_keys_free() -> bool:
+	var f := get_viewport().gui_get_focus_owner()
+	return not (f is LineEdit or f is TextEdit)
 
 
 func _arcade_step(dt: float) -> void:
-	var aspect := _canvas.size.x / maxf(_canvas.size.y, 1.0) if _canvas else 2.0
+	var aspect := _canvas.size.x / maxf(_canvas.size.y, 1.0) if _canvas and is_instance_valid(_canvas) else 2.0
+	# Your mallet always moves, even while the puck is waiting to be served.
+	if _arcade_keys_free():
+		var key := Vector2(
+			float(Input.is_key_pressed(KEY_RIGHT) or Input.is_physical_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_LEFT) or Input.is_physical_key_pressed(KEY_A)),
+			float(Input.is_key_pressed(KEY_DOWN) or Input.is_physical_key_pressed(KEY_S)) - float(Input.is_key_pressed(KEY_UP) or Input.is_physical_key_pressed(KEY_W)))
+		if key != Vector2.ZERO:
+			_game.target = _game.me + key * 0.08
+	_game.me_prev = _game.me
+	_game.me = _game.me.move_toward(Vector2(clampf(_game.target.x, 0.04, 0.47), clampf(_game.target.y, 0.08, 0.92)), dt * 3.2)
+	_game.ai_prev = _game.ai
+	if _real():
+		# Their mallet glides to where they last were, so it never teleports.
+		_game.ai = _game.ai.lerp(_game.ai_target, minf(1.0, dt * 18.0))
+		_arcade_net(dt)
+		if _now() - _game.last_rx > 8.0:
+			_game.running = false
+			_game.over = true
+			_bubble.text = "Lost @%s. They may have closed the game or lost signal." % companion.handle
+			await get_tree().create_timer(2.0).timeout
+			if is_inside_tree():
+				_finish("Game paused for good.")
+			return
+	else:
+		_arcade_ai(dt)
 	if _game.pause > 0.0:
 		_game.pause -= dt
 		return
-	# Your mallet: follows the mouse or arrow keys, stays on your half.
-	var key := Vector2(
-		float(Input.is_key_pressed(KEY_RIGHT) or Input.is_physical_key_pressed(KEY_D)) - float(Input.is_key_pressed(KEY_LEFT) or Input.is_physical_key_pressed(KEY_A)),
-		float(Input.is_key_pressed(KEY_DOWN) or Input.is_physical_key_pressed(KEY_S)) - float(Input.is_key_pressed(KEY_UP) or Input.is_physical_key_pressed(KEY_W)))
-	if key != Vector2.ZERO:
-		_game.target = _game.me + key * dt * 1.4
-	_game.me_prev = _game.me
-	_game.me = _game.me.move_toward(Vector2(clampf(_game.target.x, 0.04, 0.47), clampf(_game.target.y, 0.08, 0.92)), dt * 3.2)
+	# Small steps so a fast puck can't skip through a mallet.
+	var steps := 4
+	for i in steps:
+		if not _arcade_puck(dt / steps, aspect):
+			return
+
+
+func _arcade_ai(dt: float) -> void:
 	# Their mallet: chases the puck on their half, otherwise guards the goal.
-	_game.ai_prev = _game.ai
 	var want := Vector2(0.88, clampf(_game.puck.y, 0.25, 0.75))
-	if _game.puck.x > 0.5:
-		# Get behind the puck, lined up with your goal, then drive through it.
-		var aim: Vector2 = (_game.puck - Vector2(0.0, 0.5)).normalized()
-		want = _game.puck + aim * 0.05
+	var pk: Vector2 = _game.puck
+	var cornered := pk.x > 0.9 or pk.y < 0.12 or pk.y > 0.88
+	if pk.x > 0.5 and not cornered:
+		var aim: Vector2 = (pk - Vector2(0.0, 0.5)).normalized()
+		want = pk + aim * 0.05
 		if _game.ai.distance_to(want) < 0.03:
-			want = _game.puck - aim * 0.05
+			want = pk - aim * 0.05
+	elif cornered and pk.x > 0.5:
+		# Don't pin the puck against the boards: back off and let it drift out.
+		want = Vector2(0.8, 0.5)
 	# Friendly, not pro: slower than you, and it eases off further when it's ahead.
 	var lead := float(_game.them - _game.you)
 	var ai_speed: float = (0.45 + 0.7 * _game.skill) * (0.75 if lead > 0.0 else 1.0)
 	_game.ai = _game.ai.move_toward(Vector2(clampf(want.x, 0.53, 0.96), clampf(want.y, 0.08, 0.92)), dt * ai_speed)
-	# Puck.
+
+
+## One small physics step. Returns false when a goal ended the step.
+func _arcade_puck(dt: float, aspect: float) -> bool:
 	var pk: Vector2 = _game.puck + _game.vel * dt
 	var v: Vector2 = _game.vel * pow(0.85, dt)
+	# Like the air on a real table: a slow puck by the boards drifts back into play, so it never gets stuck.
+	if v.length() < 0.15 and (pk.x < 0.07 or pk.x > 0.93 or pk.y < 0.12 or pk.y > 0.88) and (not _real() or _game.owner):
+		v += (Vector2(0.5, 0.5) - pk).normalized() * 0.5 * dt
+	for who in ["me", "ai"]:
+		var m: Vector2 = _game[who]
+		var reach := REACH_ME if who == "me" else REACH_THEM
+		var d := Vector2((pk.x - m.x) * aspect, pk.y - m.y)
+		if d.length() >= reach:
+			continue
+		var n := d.normalized() if d.length() > 0.0001 else Vector2(1.0 if who == "me" else -1.0, 0.0)
+		var n_tab := Vector2(n.x / aspect, n.y)
+		pk = m + n_tab * reach
+		var mallet_v: Vector2 = (m - _game[who + "_prev"]) / maxf(get_process_delta_time(), 0.001)
+		# Only bounce if the puck is coming in; if it's already leaving, just keep them apart.
+		var rel: Vector2 = v - mallet_v
+		if who == "me" and _real() and not _game.owner:
+			# You touched it: it's yours now. Tell them straight away.
+			_game.owner = true
+			_game.claim_at = _now()
+			_game.send_clock = 1.0
+		if Vector2(rel.x * aspect, rel.y).dot(n) < 0.0:
+			var power := 1.0 if who == "me" or _real() else 0.7
+			v = (n_tab * maxf(0.75, v.length()) + mallet_v * 0.7) * power
+	# Walls.
 	if pk.y < 0.05 or pk.y > 0.95:
-		v.y = -v.y
+		v.y = absf(v.y) if pk.y < 0.05 else -absf(v.y)
 		pk.y = clampf(pk.y, 0.05, 0.95)
 	var in_goal_mouth := pk.y > 0.35 and pk.y < 0.65
 	if pk.x < 0.02:
-		if in_goal_mouth:
+		if in_goal_mouth and (not _real() or _game.owner):
 			_goal(false)
-			return
-		v.x = absf(v.x)
-		pk.x = 0.02
+			return false
+		if in_goal_mouth:
+			v = Vector2.ZERO # wait for whoever's in charge
+			pk.x = 0.02
+		else:
+			v.x = absf(v.x)
+			pk.x = 0.02
 	if pk.x > 0.98:
 		if in_goal_mouth:
-			_goal(true)
-			return
-		v.x = -absf(v.x)
-		pk.x = 0.98
+			if not _real():
+				_goal(true)
+				return false
+			# Their goal is theirs to call. Hold the puck until they say so.
+			v = Vector2.ZERO
+			pk.x = 0.98
+		else:
+			v.x = -absf(v.x)
+			pk.x = 0.98
+	# A puck pinned against a wall pushes your mallet back, instead of jittering through it.
 	for who in ["me", "ai"]:
 		var m: Vector2 = _game[who]
+		var reach := REACH_ME if who == "me" else REACH_THEM
 		var d := Vector2((pk.x - m.x) * aspect, pk.y - m.y)
-		var reach := 0.125 if who == "me" else 0.1
-		if d.length() < reach:
+		if d.length() < reach * 0.98 and d.length() > 0.0001:
 			var n := d.normalized()
-			var mallet_v: Vector2 = (m - _game[who + "_prev"]) / maxf(dt, 0.001)
-			pk = m + Vector2(n.x / aspect, n.y) * reach
-			var power := 1.0 if who == "me" else 0.7
-			v = (Vector2(n.x / aspect, n.y) * maxf(0.75, v.length()) + mallet_v * 0.7) * power
+			_game[who] = pk - Vector2(n.x / aspect, n.y) * reach
 	_game.puck = pk
 	_game.vel = v.limit_length(1.6)
+	if _real() and _game.owner and pk.x > 0.5:
+		# It crossed into their half: hand it over.
+		_game.owner = false
+		_game.handoff = true
+		_game.heard_owner_at = _now()
+		_game.send_clock = 1.0
+	return true
+
+
+## Send your side ~20 times a second; while the puck is on your half you're in charge of it.
+func _arcade_net(dt: float) -> void:
+	_game.send_clock += dt
+	if _game.send_clock < 1.0 / NET_HZ:
+		return
+	_game.send_clock = 0.0
+	# Nobody seems to be in charge and it's on your side: take it, so the puck never freezes.
+	if not _game.owner and _game.pause <= 0.0 and _game.puck.x < 0.5 and _now() - _game.heard_owner_at > 0.6:
+		_game.owner = true
+	var own := 2 if _game.handoff else (1 if _game.owner else 0)
+	_game.handoff = false
+	Net.send_rt(companion.handle, [0, _game.me.x, _game.me.y, _game.puck.x, _game.puck.y, _game.vel.x, _game.vel.y, own])
+
+
+func _on_rt(d: Array) -> void:
+	if d.is_empty():
+		return
+	if _game.has("last_rx"):
+		_game.last_rx = _now()
+	match int(d[0]):
+		0: # their mallet and, if they're in charge, the puck (mirrored: their left is your right)
+			if kind != "arcade" or d.size() < 8:
+				return
+			if not _game.running and _game.ready_me and not _game.over:
+				_arcade_begin()
+			_game.ai_target = Vector2(1.0 - float(d[1]), float(d[2]))
+			var own := int(d[7])
+			if own == 0 or _game.pause > 0.0:
+				return
+			if own == 1 and _game.owner:
+				# Both touched it at once: the earlier handle keeps it, the other gives way.
+				if _now() - _game.claim_at < 0.3 and str(Profile.data.get("handle", "")) < str(companion.handle):
+					return
+			_game.owner = own == 2
+			_game.heard_owner_at = _now()
+			_game.puck = Vector2(1.0 - float(d[3]), float(d[4]))
+			_game.vel = Vector2(-float(d[5]), float(d[6]))
+		1: # they conceded: [1, their score, your score, serve vy]
+			if kind != "arcade" or d.size() < 4 or _game.over:
+				return
+			_game.them = int(d[1])
+			_game.you = int(d[2])
+			_bubble.text = "Goal! You scored on @%s." % companion.handle
+			_after_goal(1.0, float(d[3]))
+		2: # they pressed Face off
+			if kind != "arcade":
+				return
+			_game.ready_them = true
+			if _game.ready_me:
+				Net.send_rt(companion.handle, [2])
+				_arcade_begin()
+		3: # shared listening: they put on a record
+			if kind == "records" and d.size() >= 2:
+				_play_record(int(d[1]), false)
+		4: # dance score
+			if kind == "club" and d.size() >= 3:
+				_game.their_hits = int(d[1])
+				_game.their_total = int(d[2])
+				if _game.get("done", false):
+					_club_result()
 
 
 func _goal(you_scored: bool) -> void:
@@ -673,12 +883,25 @@ func _goal(you_scored: bool) -> void:
 		_bubble.text = ["Okay, lucky shot.", "Hey! I wasn't ready.", "Fine. FINE."][_rng.randi() % 3]
 	else:
 		_game.them += 1
-		_bubble.text = ["Goal! Did you see that?", "Too easy. Kidding. Mostly.", "And the crowd goes wild."][_rng.randi() % 3]
+		if _real():
+			_bubble.text = "@%s scores." % companion.handle
+		else:
+			_bubble.text = ["Goal! Did you see that?", "Too easy. Kidding. Mostly.", "And the crowd goes wild."][_rng.randi() % 3]
+	if _real():
+		var vy := _rng.randf_range(-0.15, 0.15)
+		Net.send_rt(companion.handle, [1, _game.you, _game.them, vy])
+		_after_goal(-1.0, vy)
+	else:
+		_after_goal(-1.0 if you_scored else 1.0, INF)
+
+
+func _after_goal(towards: float, vy: float) -> void:
 	if _game.you >= GOALS_TO_WIN or _game.them >= GOALS_TO_WIN:
 		_game.running = false
+		_game.over = true
 		_arcade_done()
 	else:
-		_serve(-1.0 if you_scored else 1.0)
+		_serve(towards, vy)
 
 
 func _draw_arcade() -> void:
@@ -703,13 +926,21 @@ func _draw_arcade() -> void:
 	Avatar.draw_portrait(_canvas, Profile.data.avatar, Vector2(60, 50), 24.0, UI.CORAL)
 	Avatar.draw_portrait(_canvas, companion.cfg, Vector2(s.x - 60, 50), 24.0, Color("#5E6FD8"))
 	_canvas.draw_string(UI.font(800), Vector2(0, 62), "%d   :   %d" % [_game.you, _game.them], HORIZONTAL_ALIGNMENT_CENTER, s.x, 30, UI.INK)
+	if _real() and not _game.running and not _game.over:
+		_canvas.draw_string(UI.font(600), Vector2(0, s.y - 30), "Waiting for both of you to press Face off" if _game.ready_me else "Press Face off when you're ready",
+			HORIZONTAL_ALIGNMENT_CENTER, s.x, 16, UI.INK)
 
 
 func _arcade_done() -> void:
 	var won: bool = _game.you > _game.them
-	_bubble.text = "Good game! %s" % ("You got me. Rematch soon?" if won else "Don't worry, I've had a lot of practice.")
-	_fact("Plays air hockey like the World Cup is on the line")
-	_fact("%s, %d–%d" % ["Lost to you" if won else "Beat you", maxi(_game.you, _game.them), mini(_game.you, _game.them)])
+	var score := "%d–%d" % [maxi(_game.you, _game.them), mini(_game.you, _game.them)]
+	if _real():
+		_bubble.text = "Good game! %s" % ("You won %s." % score if won else "@%s won %s." % [companion.handle, score])
+		_fact("Played air hockey with you: %s %s" % ["you won" if won else "they won", score])
+	else:
+		_bubble.text = "Good game! %s" % ("You got me. Rematch soon?" if won else "Don't worry, I've had a lot of practice.")
+		_fact("Plays air hockey like the World Cup is on the line")
+		_fact("%s, %s" % ["Lost to you" if won else "Beat you", score])
 	await get_tree().create_timer(2.5).timeout
 	if is_inside_tree():
 		_finish("Game over. Good game.")
@@ -724,7 +955,10 @@ const ARROWS := ["←", "↓", "↑", "→"]
 func _club_intro() -> void:
 	_clear()
 	_header("The DJ's playing your song.")
-	_companion("Hit the arrow keys when the notes reach the line. I'll be right next to you.")
+	if _real():
+		_companion("Same song, same steps as @%s. Hit the arrow keys (or tap the circles) when the notes reach the line." % companion.handle)
+	else:
+		_companion("Hit the arrow keys (or tap the circles) when the notes reach the line. I'll be right next to you.")
 	var bpm := 120.0
 	var notes := []
 	var t := 2.0
@@ -733,15 +967,30 @@ func _club_intro() -> void:
 		t += 60.0 / bpm * (1 if _rng.randf() < 0.7 else 2)
 	_game = {"running": false, "start": 0.0, "notes": notes, "score": 0, "perfect": 0, "flash": [0.0, 0.0, 0.0, 0.0], "bpm": bpm}
 	_canvas_area(380, _draw_club)
+	_canvas.mouse_filter = Control.MOUSE_FILTER_STOP
+	_canvas.gui_input.connect(func(e: InputEvent) -> void:
+		var pressed: bool = (e is InputEventMouseButton and e.pressed) or (e is InputEventScreenTouch and e.pressed)
+		if pressed and _game.running and _canvas.size.x > 0:
+			var lane := roundi((e.position.x / _canvas.size.x - 0.32) / 0.12)
+			if lane >= 0 and lane < 4:
+				_club_hit(lane))
 	_spacer()
 	var start := _primary("Start", func() -> void: pass)
 	start.pressed.connect(func() -> void:
 		if not _game.running:
-			_player.stream = Synth.beat(bpm, 22.0)
+			get_viewport().gui_release_focus()
+			_player.stream = Synth.club_beat()
 			_player.play()
 			_game.running = true
-			_game.start = Time.get_ticks_msec() / 1000.0
+			_game.start = _now()
 			start.visible = false)
+
+
+## Song time: follows the music itself, so notes stay on the beat even if audio starts late.
+func _club_time() -> float:
+	if _player and _player.playing:
+		return _player.get_playback_position() + AudioServer.get_time_since_last_mix() - AudioServer.get_output_latency()
+	return _now() - _game.start
 
 
 func _input(event: InputEvent) -> void:
@@ -751,21 +1000,25 @@ func _input(event: InputEvent) -> void:
 		var lane := LANES.find(event.keycode)
 		if lane < 0:
 			return
-		var now: float = Time.get_ticks_msec() / 1000.0 - _game.start
-		for n in _game.notes:
-			if n.lane == lane and not n.hit and absf(n.t - now) < 0.22:
-				n.hit = true
-				_game.score += 2 if absf(n.t - now) < 0.1 else 1
-				if absf(n.t - now) < 0.1:
-					_game.perfect += 1
-				_game.flash[lane] = 1.0
-				break
+		_club_hit(lane)
 		get_viewport().set_input_as_handled()
+
+
+func _club_hit(lane: int) -> void:
+	var now := _club_time()
+	for n in _game.notes:
+		if n.lane == lane and not n.hit and absf(n.t - now) < 0.22:
+			n.hit = true
+			_game.score += 2 if absf(n.t - now) < 0.1 else 1
+			if absf(n.t - now) < 0.1:
+				_game.perfect += 1
+			_game.flash[lane] = 1.0
+			break
 
 
 func _draw_club() -> void:
 	var s := _canvas.size
-	var now: float = Time.get_ticks_msec() / 1000.0 - _game.start if _game.running else 0.0
+	var now: float = _club_time() if _game.running else 0.0
 	var line_y := s.y * 0.82
 	var cols := [Color("#B57BFF"), Color("#5FD4FF"), Color("#7CF2A2"), Color("#FF6FB1")]
 	var pulse: float = 0.5 + 0.5 * cos(now * TAU * _game.bpm / 60.0) if _game.running else 0.0
@@ -794,13 +1047,38 @@ func _draw_club() -> void:
 
 
 func _club_done() -> void:
+	_player.stop()
 	var hits := 0
 	for n in _game.notes:
 		if n.hit:
 			hits += 1
+	_game.hits = hits
+	_game.done = true
+	if _real():
+		Net.send_rt(companion.handle, [4, hits, _game.notes.size()])
+		_fact("Danced the same song with you")
+		if _game.has("their_hits"):
+			_club_result()
+		else:
+			_bubble.text = "%d out of %d! Waiting to see how @%s did…" % [hits, _game.notes.size(), companion.handle]
+			await get_tree().create_timer(15.0).timeout
+			if is_inside_tree() and not _game.has("their_hits"):
+				_finish("What a night.")
+		return
 	_bubble.text = "%d out of %d! %s" % [hits, _game.notes.size(), "You can actually dance." if hits > _game.notes.size() / 2 else "We'll call it interpretive."]
 	_fact("Dances like nobody's watching (everybody was)")
 	_fact("Knew every word to the DJ's last song")
 	await get_tree().create_timer(2.5).timeout
+	if is_inside_tree():
+		_finish("What a night.")
+
+
+func _club_result() -> void:
+	if _game.get("shown", false):
+		return
+	_game.shown = true
+	_bubble.text = "You hit %d of %d. @%s hit %d." % [_game.hits, _game.notes.size(), companion.handle, _game.their_hits]
+	_fact("Hit %d of %d notes on the dance floor" % [_game.their_hits, _game.their_total])
+	await get_tree().create_timer(3.0).timeout
 	if is_inside_tree():
 		_finish("What a night.")

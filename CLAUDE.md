@@ -90,6 +90,13 @@ thrift try-on, record listening via `scripts/synth.gd`, Star Catcher arcade, dan
   clients re-follow open matches (`Net._refollow`) because the relay keeps no state.
 - Invites: 15 s cooldown per person and one invite card at a time. Live games with a real person show
   `scripts/ui/quick_chat.gd` beside the game (chat only between matches).
+- Real-time games with a real person use `Net.send_rt` / `rt_received` (relay type `rt`: up to 8 numbers, same venue
+  only). Air hockey is truly two-player: one side "owns" the puck at a time (takes it when it enters their half or
+  their mallet touches it, hands it over at the midline); only the owner can concede a goal, so scores always agree.
+  Records are shared listening (either person's pick plays for both); the dance floor uses the shared seed and swaps
+  scores at the end. Thrift still uses `LIVE_MOMENTS`.
+- Music is pre-baked into `audio/*.wav` by `tools/bake_audio.gd` (run headless after changing `RECORDS` or the beat);
+  `Synth.record()` / `Synth.club_beat()` load those and only fall back to live synthesis. Building audio live froze the web build.
 - Voice: noise gate (`GATE_LEVEL`), averaged downsampling, jitter buffer (`_drain_voice`), and push-to-talk in the call bar.
 
 ## Data boundaries

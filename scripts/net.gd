@@ -13,6 +13,8 @@ signal invited(handle: String, venue: String, seed: int)
 signal invite_answered(handle: String, yes: bool, seed: int)
 ## A shared game move from your partner: their answer for a round.
 signal play_received(handle: String, round: int, choice: int)
+## Fast game state from your partner (air hockey, shared listening, dance scores). A few numbers only.
+signal rt_received(handle: String, data: Array)
 
 const Validate = preload("res://scripts/validate.gd")
 const UI = preload("res://scripts/ui.gd")
@@ -258,6 +260,18 @@ func _relay(id: int, msg: Dictionary) -> void:
 					out.round = clampi(int(msg.get("round", 0)), 0, 20)
 					out.choice = clampi(int(msg.get("choice", 0)), 0, 8)
 			_send_to(target, out)
+		"rt":
+			# Real-time game state, same-venue only: up to 8 plain numbers, nothing else.
+			var target := _peer_by_handle(str(msg.get("to", "")))
+			var d = msg.get("d", [])
+			if p.handle == "" or target < 0 or typeof(d) != TYPE_ARRAY or d.size() > 8 or not _same_room(p, _peers[target]):
+				return
+			var clean := []
+			for x in d:
+				if typeof(x) != TYPE_FLOAT and typeof(x) != TYPE_INT:
+					return
+				clean.append(snappedf(clampf(float(x), -100.0, 100.0), 0.0001))
+			_send_to(target, {"t": "rt", "from": p.handle, "d": clean})
 		"unmatch":
 			# Closing kindly ends the connection for both people: no more chat, quests or calls.
 			var to := str(msg.get("to", ""))
@@ -385,6 +399,10 @@ func reply_invite(handle: String, yes: bool, seed: int) -> void:
 
 func send_play(handle: String, round: int, choice: int) -> void:
 	_send({"t": "play", "to": handle, "round": round, "choice": choice})
+
+
+func send_rt(handle: String, data: Array) -> void:
+	_send({"t": "rt", "to": handle, "d": data})
 
 
 func send_quest(handle: String, q: Dictionary) -> void:
@@ -571,6 +589,10 @@ func _receive(msg: Dictionary) -> void:
 			invited.emit(str(msg.get("from", "")), str(msg.get("venue", "")), int(msg.get("seed", 0)))
 		"invite_reply":
 			invite_answered.emit(str(msg.get("from", "")), bool(msg.get("yes", false)), int(msg.get("seed", 0)))
+		"rt":
+			var d = msg.get("d", [])
+			if typeof(d) == TYPE_ARRAY:
+				rt_received.emit(str(msg.get("from", "")), d)
 		"play":
 			play_received.emit(str(msg.get("from", "")), int(msg.get("round", 0)), int(msg.get("choice", 0)))
 		"welcome":

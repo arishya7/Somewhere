@@ -75,8 +75,7 @@ func _ready() -> void:
 		Profile.closed_changed.disconnect(on_closed))
 	_input.editable = _open()
 	send.disabled = not _open()
-	if _open():
-		_input.grab_focus.call_deferred()
+	# No auto-focus: games use the arrow keys, and those shouldn't end up typed into chat.
 
 
 func _render() -> void:

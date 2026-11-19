@@ -2,6 +2,26 @@ extends RefCounted
 ## A tiny synthesiser: renders short melodies and beats into playable audio streams.
 
 const RATE := 22050
+## Pre-made audio (made by tools/bake_audio.gd). Building sound live in a browser freezes the game for a moment.
+const BAKED_DIR := "res://audio/"
+static var _cache := {}
+
+
+## A listening-station record: the baked file if there is one, else built once and kept.
+static func record(index: int, r: Array) -> AudioStream:
+	var key := "record_%d" % index
+	if not _cache.has(key):
+		var path := BAKED_DIR + key + ".wav"
+		_cache[key] = load(path) if ResourceLoader.exists(path) else melody(r[4], r[2], r[3])
+	return _cache[key]
+
+
+## The dance floor's beat (120 bpm, 22 seconds).
+static func club_beat() -> AudioStream:
+	if not _cache.has("club_beat"):
+		var path := BAKED_DIR + "club_beat.wav"
+		_cache["club_beat"] = load(path) if ResourceLoader.exists(path) else beat(120.0, 22.0)
+	return _cache["club_beat"]
 
 
 static func _wav(samples: PackedFloat32Array) -> AudioStreamWAV:
